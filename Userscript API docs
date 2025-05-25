@@ -1,0 +1,150 @@
+Userscript API docs
+Intro
+This document describes the new API available for the userscripts.
+
+Events
+There are a few custom DOM events that can help to initialize a userscript:
+
+wme-initialized - the WME initialized the window.W global object and its internals and rendered the UI. Note: at this point the map data hasn't been fetched yet.
+wme-logged-in - it happens after the wme-initialized event, when the WME fetches the user info of the currently logged-in user, or after the user logs in using the login form
+wme-logged-out - when the user logs out of the WME
+wme-map-data-loaded - it happens after the wme-initialized event whenever the WME fetches the map data from the server (e.g. when user scrolls the map, changes the zoom level or presses the refresh button)
+wme-ready - it happens only once when the wme-initialized, wme-logged-in, and wme-map-data-loaded had been dispatched
+To check if these events had been dispatched yet one can use the W.userscripts.state object:
+
+interface WmeState {
+  isInitialMapDataLoaded: boolean; // if `wme-map-data-loaded` has already been dispatched
+  isInitialized: boolean; // if `wme-initialzied` has already been dispatched
+  isReady: boolean; // if `wme-ready` has already been dispatched
+}
+
+W.userscripts.state: WmeState;
+Migration notes
+Userscripts often use intervals or timeouts to watch for when all the WME global variables they need are defined and then initialize themself. This approach isn't reliable, so it's better to use the wme-initialized or the wme-ready event:
+
+if (W?.userscripts?.state.isInitialized) {
+  initializeMyUserscript();
+} else {
+  document.addEventListener("wme-initialized", initializeMyUserscript, {
+    once: true,
+  });
+}
+
+// or in case user info and map data needed:
+if (W?.userscripts?.state.isReady) {
+  console.log("user:", W.loginManager.user);
+  console.log("segments:", W.model.segments.getObjectArray());
+
+  initializeMyUserscript();
+} else {
+  document.addEventListener("wme-ready", initializeMyUserscript, {
+    once: true,
+  });
+}
+Sidebar tabs
+Userscripts can add a custom tab to the Scripts sidebar using the API:
+
+interface RegisterSidebarTabResult {
+  tabLabel: HTMLElement;
+  tabPane: HTMLElement;
+}
+
+W.userscripts.registerSidebarTab(scriptId: string): RegisterSidebarTabResult;
+W.userscripts.waitForElementConnected(el: HTMLElement): Promise<void>;
+
+W.userscripts.removeSidebarTab(scriptId: string): void;
+Adding a tab
+The registerSidebarTab() method adds a new tab to the Scripts sidebar. The scriptId is a constant identifier for the script. Script authors may use any string they like as long as it's unique. If a tab with the same scriptId already exists, this method will throw an error.
+
+The method returns two DOM elements. Userscripts must append a text label (or some icon) to the tabLabel element and tab content to the tabPane element. These two elements aren't immediately available in the DOM since WME rendering is asynchronous. Userscripts can listen to element-connected and element-disconnected custom DOM events dispatched when elements are appended or removed from the DOM:
+
+tabLabel.addEventListener("element-connected", onElementConnected, {
+  once: true,
+});
+tabLabel.addEventListener("element-disconnected", onElementDisconnected);
+The W.userscripts.waitForElementConnected() helper function is to simplify waiting for the element-connected event. It returns a Promise which is resolved once the element is available in the DOM:
+
+await W.userscripts.waitForElementConnected(tabPane);
+
+// or just use the Promise directly
+W.userscripts.waitForElementConnected(tabPane).then(() => {
+  // do something
+});
+Removing the tab
+The removeSidebarTab() method removes the tab from the Scripts sidebar. If the tab with the specified scriptId doesn't exist, this method will throw an error.
+
+Example
+async function initializeMyUserscript()
+    const { tabLabel, tabPane } = W.userscripts.registerSidebarTab("my-cool-script");
+
+    tabLabel.innerText = 'CS';
+    tabLabel.title = 'Cool script';
+
+    tabPane.innerHTML = "<h1>HELLO WORLD!</h1>";
+
+    tabPane.addEventListener("element-connected", () => {
+      // at this point the tabPane is in the DOM
+    }, { once: true });
+
+    // or use the helper function:
+    await W.userscripts.waitForElementConnected(tabPane);
+}
+Migration notes
+The migration should be pretty straightforward.
+
+Instead of directly appending the tab label into $('#user-tabs > .nav-tabs') and tab content into $('#user-info > .flex-parent > .tab-content') userscripts should execute the W.userscripts.registerSidebarTab(...) and append labels and content into the DOM elements returned by the method.
+
+The main difference is that elements aren't immediately available in the DOM.
+
+Since many userscripts need the tab pane to be available in the DOM to complete their initialization, they should listen to the element-connected event on the tabPane DOM element. The W.userscripts.waitForElementConnected() helper function helps to reduce the amount of boilerplate code.
+
+Accessing Map Elements
+Map element is either a feature or a marker.
+
+W.userscripts.getDataModelByMapElement() function can be used to find an underlying model of a map element.
+
+W.userscripts.getDataModelByMapElement(el: HTMLElement | SVGElement): DataModelObject | null;
+W.userscripts.getMapElementByDataModel() function can be used to find a map element having its model.
+
+W.userscripts.getMapElementByDataModel(model: DataModelObject): HTMLElement | SVGElement | null;
+Migration notes
+Currently, userscripts rely on the marker's data-id attribute to find its model. While this method works, the DOM structure might change in the future. So it is advised to use the getMapElementByDataModel() function.
+
+Finding marker's model
+W.userscripts.getDataModelByMarkerElement() function can be used to find an underlying model of a marker.
+
+W.userscripts.getDataModelByMarkerElement(markerEl: HTMLElement): DataModelObject | null;
+Finding marker's DOM element
+W.userscripts.getMarkerElementByDataModel() function can be used to find a DOM element of a marker having its model.
+
+W.userscripts.getMarkerElementByDataModel(model: DataModelObject): HTMLElement | null;
+Finding feature's model
+W.userscripts.getDataModelByFeatureElement() function can be used to find an underlying model of a feature having its DOM element.
+
+W.userscripts.getDataModelByFeatureElement(featureEl: SVGElement): DataModelObject | null;
+Finding feature's DOM element
+W.userscripts.getFeatureElementByDataModel() function can be used to find a DOM element of a feature having its model.
+
+W.userscripts.getFeatureElementByDataModel(model: DataModelObject): SVGElement | null;
+Geometry utils
+WME used to use OpenLayers geometry objects in a Web Mercator projection, but now it mostly uses GeoJSON geometries in a WGS84 projection.
+
+This API exposes a few helper functions that should simplify the gradual migration of userscripts.
+
+Convert the Web-Mercator OpenLayers geometry to the WGS84 GeoJSON geometry
+The W.userscripts.toGeoJSONGeometry() function converts the Web-Mercator OpenLayers geometry to the WGS84 GeoJSON geometry. It returns an original geometry if its already a GeoJSON geometry.
+
+W.userscripts.toGeoJSONGeometry(geometry: OpenLayers.Geometry | GeoJSON.Geometry): GeoJSON.Geometry;
+Convert the WGS84 GeoJSON geometry to the Web-Mercator OpenLayers geometry
+The W.userscripts.toOLGeometry() function converts the WGS84 GeoJSON geometry to the Web-Mercator OpenLayers geometry. It returns an original geometry if its already an OpenLayers geometry.
+
+W.userscripts.toOLGeometry(geometry: OpenLayers.Geometry | GeoJSON.Geometry): OpenLayers.Geometry;
+WKT utils
+Convert WKT geometry into GeoJSON geometry
+W.userscripts.convertWktToGeoJSON() function can be used to convert the WKT geometry into GeoJSON geometry:
+
+W.userscripts.convertWktToGeoJSON(geometry: GeoJSON.Geometry): string; // WKT string
+Convert GeoJSON geometry into WKT geometry
+W.userscripts.convertGeoJSONToWkt() function can be used to convert the GeoJSON geometry into WKT geometry:
+
+W.userscripts.convertGeoJSONToWkt(geometry: string /* WKT string */): GeoJSON.Geometry;
