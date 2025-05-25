@@ -148,3 +148,7 @@ Convert GeoJSON geometry into WKT geometry
 W.userscripts.convertGeoJSONToWkt() function can be used to convert the GeoJSON geometry into WKT geometry:
 
 W.userscripts.convertGeoJSONToWkt(geometry: string /* WKT string */): GeoJSON.Geometry;
+
+Waze nutzt WMTS
+
+Ausgabe immer als vollständiger code
