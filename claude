@@ -1,0 +1,723 @@
+// ==UserScript==
+// @name WME MSN Baustellen & Traffic3 Enhanced
+// @description WME MSN Baustellen & Traffic Overlay3 with Enhanced Popups
+// @namespace https://greasyfork.org/de/users/863740-horst-wittlich
+// @version 2025.05.28
+// @author vertexcode, hiwi234, su-mo, enhanced by Claude
+// @match https://*.waze.com/editor*
+// @match https://*.waze.com/*/editor*
+// @match https://beta.waze.com/editor*
+// @match https://beta.waze.com/*/editor*
+// @icon https://www.google.com/s2/favicons?sz=64&domain=waze.com
+// @connect mydrive.api-system.tomtom.com
+// @grant GM_xmlhttpRequest
+// @grant GM_info
+// @license MIT
+// ==/UserScript==
+
+/* global I18n */
+(function () {
+'use strict';
+const prefix = "⛔🛣️🚧";
+const version = GM_info.script.version;
+const name = GM_info.script.name;
+const scriptURL = GM_info.script.namespace;
+let uOpenLayers;
+let uWaze;
+let iconsLayer;
+let epsg900913, epsg4326;
+let btfDiv;
+let btfDivVisible = false;
+let mouseInPopup = false;
+let popupID = false;
+let btfDivOffset = -3;
+let layerCheckBoxElement;
+let panelCheckBoxElement;
+let language ='en';
+let constructionData = []; // Store all construction site data for enhanced popups
+
+const mtotypes = [
+    { "type" : "closure", "icon" : 'https://upload.wikimedia.org/wikipedia/commons/4/46/Zeichen_250_-_Verbot_f%C3%BCr_Fahrzeuge_aller_Art%2C_StVO_1970.svg' },
+    { "type" : "construct", "icon" : 'https://upload.wikimedia.org/wikipedia/commons/a/a9/Zeichen_123_-_Arbeitsstelle%2C_StVO_2013.svg' },
+    { "type" : "narrows", "icon" : 'https://upload.wikimedia.org/wikipedia/commons/0/08/Zeichen_120_-_Verengte_Fahrbahn%2C_StVO_1970.svg' },
+    { "type" : "traffic", "icon" : 'https://upload.wikimedia.org/wikipedia/commons/b/bc/Zeichen_124_-_Stau%2C_StVO_1992.svg' },
+    { "type" : "others", "icon" : 'https://upload.wikimedia.org/wikipedia/commons/0/02/Zeichen_101_-_Gefahrstelle%2C_StVO_1970.svg' }
+];
+
+function loadTranslations() {
+    setTranslations({
+        en: {
+            closure : 'Closures',
+            construct : 'Roadworks',
+            narrows : 'Lane narrowing',
+            traffic : 'Traffic jam',
+            others : 'Others',
+            enable : 'Enable',
+            regex : {
+                closure : /closed/i,
+                construct : /roadworks/i,
+                narrows : /(reduced|lane|line)/i,
+                traffic : /traffic/i,
+                others : "",
+            },
+            reason : 'Reason',
+            street : 'Street',
+            from : 'From',
+            direction : 'Direction',
+            distance : 'Distance',
+            at : 'At',
+            till : 'Till',
+            severity : 'Severity',
+            type : 'Type',
+            delay : 'Delay',
+            coordinates : 'Coordinates',
+            details : 'Details',
+            closePopup : 'Close',
+            showOnMap : 'Show on Map'
+        },
+        de: {
+            closure : 'Sperrungen',
+            construct : 'Baustellen',
+            narrows : 'Fahrbahn Verengungen',
+            traffic : 'Staus',
+            others : 'Sonstiges',
+            enable : 'Aktivieren',
+            regex : {
+                closure : /gesperrt/i,
+                construct : /Baustelle/i,
+                narrows : /(vereng|Fahrstreifen)/i,
+                traffic : /(Stau|Verkehr)/i,
+                others : "",
+            },
+            reason : 'Grund',
+            street : 'Straße',
+            from : 'von',
+            direction : 'nach',
+            distance : 'Länge',
+            at : 'ab',
+            till : 'bis',
+            severity : 'Schweregrad',
+            type : 'Typ',
+            delay : 'Verzögerung',
+            coordinates : 'Koordinaten',
+            details : 'Details',
+            closePopup : 'Schließen',
+            showOnMap : 'Auf Karte zeigen'
+        }
+    });
+}
+
+function insertCSS() {
+    var style = document.createElement('style');
+    style.type = 'text/css';
+    style.append(`#sidepanel-${prefix} .mto-container { display:flex; align-items:center; margin:2px; font-weight:normal; }`);
+    style.append(`#sidepanel-${prefix} .mto-container img { width:1.5em; height:1.5em; margin:0 1ex; }`);
+    style.append(`#sidepanel-${prefix} .mto-container input[type="checkbox"] { margin:0; }`);
+    
+    // Enhanced popup styles
+    style.append(`
+        #btfDiv {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            padding: 0;
+            overflow: hidden;
+            min-width: 300px;
+            max-width: 450px;
+        }
+        
+        #btfDiv .popup-header {
+            background: rgba(255,255,255,0.1);
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #btfDiv .popup-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        
+        #btfDiv .close-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        
+        #btfDiv .close-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        #btfDiv .popup-content {
+            padding: 16px;
+        }
+        
+        #btfDiv table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 8px 0;
+        }
+        
+        #btfDiv td {
+            padding: 6px 8px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            white-space: nowrap;
+        }
+        
+        #btfDiv td:first-child {
+            font-weight: 500;
+            opacity: 0.9;
+            width: 30%;
+        }
+        
+        #btfDiv td:last-child {
+            word-break: break-word;
+            white-space: normal;
+        }
+        
+        #btfDiv .severity-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        #btfDiv .severity-high { background-color: #ff4757; }
+        #btfDiv .severity-medium { background-color: #ffa502; }
+        #btfDiv .severity-low { background-color: #2ed573; }
+        
+        #btfDiv .popup-actions {
+            padding: 12px 16px;
+            background: rgba(255,255,255,0.05);
+            border-top: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            gap: 8px;
+        }
+        
+        #btfDiv .action-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s ease;
+        }
+        
+        #btfDiv .action-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        #btfDiv .construction-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+    `);
+    
+    document.getElementsByTagName('head')[0].appendChild(style);
+}
+
+function setTranslations(translations) {
+    I18n.translations[I18n.currentLocale()][prefix] = translations.en;
+    for (var i = 0; i < Object.keys(translations).length; i++) {
+        var locale = Object.keys(translations)[i];
+        if (I18n.currentLocale().match(locale)) {
+            I18n.translations[I18n.currentLocale()][prefix] = translations[locale];
+            language = locale;
+            return;
+        }
+    }
+}
+
+function convertBase(value) {
+    return {
+        from: function (baseFrom) {
+            return {
+                to: function (baseTo) {
+                    return parseInt(value, baseFrom).toString(baseTo);
+                }
+            };
+        }
+    };
+}
+
+function zfill(value, length) {
+    let s = value + "";
+    while (s.length < length) {
+        s = "0" + s;
+    }
+    return s;
+}
+
+function tile2key(x, y, z) {
+    let x_bin = convertBase(x).from(10).to(2);
+    let y_bin = convertBase(y).from(10).to(2);
+    x_bin = zfill(x_bin, z);
+    y_bin = zfill(y_bin, z);
+    
+    let quadkey = [];
+    for (let i = 0; i < z; i++) {
+        quadkey.push(y_bin.charAt(i));
+        quadkey.push(x_bin.charAt(i));
+    }
+    
+    quadkey = quadkey.join("");
+    quadkey = convertBase(quadkey).from(2).to(4);
+    quadkey = zfill(quadkey, z);
+    return quadkey;
+}
+
+function addIcon() {
+    if (uOpenLayers.Icon) return;
+    uOpenLayers.Icon = uOpenLayers.Class({
+        url: null,
+        size: null,
+        offset: null,
+        calculateOffset: null,
+        imageDiv: null,
+        px: null,
+        
+        initialize: function (url, size, offset, calculateOffset) {
+            this.url = url;
+            this.size = size || {w: 20, h: 20};
+            this.offset = offset || {x: -(this.size.w / 2), y: -(this.size.h / 2)};
+            this.calculateOffset = calculateOffset;
+            var id = uOpenLayers.Util.createUniqueID("OL_Icon_");
+            this.imageDiv = uOpenLayers.Util.createAlphaImageDiv(id);
+        },
+        
+        destroy: function () {
+            this.erase();
+            OpenLayers.Event.stopObservingElement(this.imageDiv.firstChild);
+            this.imageDiv.innerHTML = "";
+            this.imageDiv = null;
+        },
+        
+        clone: function () {
+            return new OpenLayers.Icon(this.url, this.size, this.offset, this.calculateOffset);
+        },
+        
+        setSize: function (size) {
+            if (size != null) {
+                this.size = size;
+            }
+            this.draw();
+        },
+        
+        setUrl: function (url) {
+            if (url != null) {
+                this.url = url;
+            }
+            this.draw();
+        },
+        
+        draw: function (px) {
+            uOpenLayers.Util.modifyAlphaImageDiv(this.imageDiv, null, null, this.size, this.url, "absolute");
+            this.moveTo(px);
+            return this.imageDiv;
+        },
+        
+        erase: function () {
+            if (this.imageDiv != null && this.imageDiv.parentNode != null) {
+                uOpenLayers.Element.remove(this.imageDiv);
+            }
+        },
+        
+        setOpacity: function (opacity) {
+            uOpenLayers.Util.modifyAlphaImageDiv(this.imageDiv, null, null, null, null, null, null, null, opacity);
+        },
+        
+        moveTo: function (px) {
+            if (px != null) {
+                this.px = px;
+            }
+            if (this.imageDiv != null) {
+                if (this.px == null) {
+                    this.display(false);
+                } else {
+                    if (this.calculateOffset) {
+                        this.offset = this.calculateOffset(this.size);
+                    }
+                    uOpenLayers.Util.modifyAlphaImageDiv(this.imageDiv, null, {
+                        x: this.px.x + this.offset.x,
+                        y: this.px.y + this.offset.y
+                    });
+                }
+            }
+        },
+        
+        display: function (display) {
+            this.imageDiv.style.display = (display) ? "" : "none";
+        },
+        
+        isDrawn: function () {
+            var isDrawn = (this.imageDiv && this.imageDiv.parentNode && (this.imageDiv.parentNode.nodeType != 11));
+            return isDrawn;
+        },
+        
+        CLASS_NAME: "OpenLayers.Icon"
+    });
+}
+
+function addQuadKeyLayer() {
+    if (uOpenLayers.Layer.QuadKey) return;
+    uOpenLayers.Layer.QuadKey = uOpenLayers.Class(uOpenLayers.Layer.Grid, {
+        isBaseLayer: false,
+        sphericalMercator: false,
+        zoomOffset: 0,
+        serverResolutions: null,
+        
+        initialize: function (name, url, options) {
+            if (options && options.sphericalMercator || this.sphericalMercator) {
+                options = uOpenLayers.Util.extend({
+                    projection: "EPSG:900913",
+                    numZoomLevels: 19
+                }, options);
+            }
+            uOpenLayers.Layer.Grid.prototype.initialize.apply(this, [name || this.name, url || this.url, {}, options]);
+        },
+        
+        clone: function (obj) {
+            if (obj == null) {
+                obj = new uOpenLayers.Layer.QuadKey(this.name, this.url, this.getOptions());
+            }
+            obj = uOpenLayers.Layer.Grid.prototype.clone.apply(this, [obj]);
+            return obj;
+        },
+        
+        getURL: function (bounds) {
+            let xyz = this.getXYZ(bounds);
+            let url = this.url;
+            let key = tile2key(xyz.x, xyz.y, xyz.z);
+            return uOpenLayers.String.format(url, {key: key});
+        },
+        
+        getXYZ: function (bounds) {
+            let res = this.getServerResolution();
+            let x = Math.round((bounds.left - this.maxExtent.left) / (res * this.tileSize.w));
+            let y = Math.round((this.maxExtent.top - bounds.top) / (res * this.tileSize.h));
+            let z = this.getServerZoom();
+            if (this.wrapDateLine) {
+                let limit = Math.pow(2, z);
+                x = ((x % limit) + limit) % limit;
+            }
+            return {'x': x, 'y': y, 'z': z};
+        },
+        
+        setMap: function (map) {
+            uOpenLayers.Layer.Grid.prototype.setMap.apply(this, arguments);
+            if (!this.tileOrigin) {
+                this.tileOrigin = new uOpenLayers.LonLat(this.maxExtent.left, this.maxExtent.bottom);
+            }
+        },
+        
+        CLASS_NAME: "OpenLayers.Layer.QuadKey"
+    });
+}
+
+function addInfoPopup(Layer) {
+    btfDiv = document.createElement('div');
+    btfDiv.id = "btfDiv";
+    btfDiv.style.position = 'absolute';
+    btfDiv.style.visibility = 'hidden';
+    btfDiv.style.top = '0';
+    btfDiv.style.left = '0';
+    btfDiv.style.zIndex = 10000;
+    document.body.appendChild(btfDiv);
+    
+    btfDiv.addEventListener("mouseenter", enterPopup, false);
+    btfDiv.addEventListener("mouseleave", leavePopup, false);
+}
+
+function enterPopup(params) {
+    mouseInPopup = true;
+}
+
+function leavePopup(params) {
+    mouseInPopup = false;
+    hidePopup();
+}
+
+function toISOLocal(d) {
+    var z = n => ('0' + n).slice(-2);
+    return d.getFullYear() + '-'
+        + z(d.getMonth()+1) + '-' +
+        z(d.getDate()) + ' ' +
+        z(d.getHours()) + ':' +
+        z(d.getMinutes()) + ':' +
+        z(d.getSeconds());
+}
+
+function getSeverityClass(poi) {
+    // Determine severity based on type and description
+    if (poi.d.toLowerCase().includes('closure') || poi.d.toLowerCase().includes('gesperrt')) {
+        return 'severity-high';
+    } else if (poi.d.toLowerCase().includes('construction') || poi.d.toLowerCase().includes('baustelle')) {
+        return 'severity-medium';
+    }
+    return 'severity-low';
+}
+
+function getConstructionType(poi) {
+    for (let type of mtotypes) {
+        let regex = I18n.t(`${prefix}.regex`)[type.type];
+        if (poi.d.match(regex)) {
+            return {
+                type: type.type,
+                icon: type.icon,
+                name: I18n.t(`${prefix}.${type.type}`)
+            };
+        }
+    }
+    return {
+        type: 'others',
+        icon: mtotypes[4].icon,
+        name: I18n.t(`${prefix}.others`)
+    };
+}
+
+function getEnhancedPopupText(poi) {
+    const constructionType = getConstructionType(poi);
+    const severityClass = getSeverityClass(poi);
+    
+    let html = `
+        <div class="popup-header">
+            <h3 class="popup-title">
+                <img src="${constructionType.icon}" class="construction-icon" alt="${constructionType.name}">
+                ${constructionType.name}
+            </h3>
+            <button class="close-btn" onclick="this.closest('#btfDiv').style.visibility='hidden'">&times;</button>
+        </div>
+        <div class="popup-content">
+            <table>
+                <tr>
+                    <td>${I18n.t(prefix).type}</td>
+                    <td>
+                        <span class="severity-indicator ${severityClass}"></span>
+                        ${constructionType.name}
+                    </td>
+                </tr>
+    `;
+    
+    if (poi.d) {
+        html += `<tr><td>${I18n.t(prefix).reason}</td><td><strong>${poi.d}</strong></td></tr>`;
+    }
+    
+    if (poi.r) {
+        html += `<tr><td>${I18n.t(prefix).street}</td><td>${poi.r}</td></tr>`;
+    }
+    
+    if (poi.f) {
+        html += `<tr><td>${I18n.t(prefix).from}</td><td>${poi.f}</td></tr>`;
+    }
+    
+    if (poi.t) {
+        html += `<tr><td>${I18n.t(prefix).direction}</td><td>${poi.t}</td></tr>`;
+    }
+    
+    if (poi.l) {
+        const distance = (1000 <= poi.l) ? `${(poi.l / 1000).toFixed(1)} km` : `${poi.l} m`;
+        html += `<tr><td>${I18n.t(prefix).distance}</td><td>${distance}</td></tr>`;
+    }
+    
+    if (poi.sd) {
+        html += `<tr><td>${I18n.t(prefix).at}</td><td>${toISOLocal(new Date(poi.sd))}</td></tr>`;
+    }
+    
+    if (poi.ed) {
+        html += `<tr><td>${I18n.t(prefix).till}</td><td>${toISOLocal(new Date(poi.ed))}</td></tr>`;
+    }
+    
+    if (poi.p) {
+        html += `<tr><td>${I18n.t(prefix).coordinates}</td><td>${poi.p.x.toFixed(6)}, ${poi.p.y.toFixed(6)}</td></tr>`;
+    }
+    
+    html += `
+            </table>
+        </div>
+        <div class="popup-actions">
+            <button class="action-btn" onclick="navigator.clipboard.writeText('${poi.d} - ${poi.r || 'Unknown location'}')">📋 Copy Info</button>
+            <button class="action-btn" onclick="window.open('https://www.google.com/maps/@${poi.p ? poi.p.y : 0},${poi.p ? poi.p.x : 0},15z', '_blank')">🗺️ Google Maps</button>
+        </div>
+    `;
+    
+    return getTrustedHTML(html);
+}
+
+function getTrustedHTML(htmlIn) {
+    if (typeof trustedTypes === "undefined") {
+        return htmlIn;
+    } else {
+        const escapeHTMLPolicy = trustedTypes.createPolicy("forceInner", {createHTML: (to_escape) => to_escape});
+        return escapeHTMLPolicy.createHTML(htmlIn);
+    }
+}
+
+function showPopup(poi, element) {
+    if (popupID != poi.id) { return; }
+    
+    btfDiv.style.visibility = "hidden";
+    btfDiv.style.top = "0px";
+    btfDiv.style.left = "0px";
+    btfDiv.style.height = "auto";
+    btfDiv.style.width = "auto";
+    btfDiv.style.overflow = "auto";
+    
+    btfDiv.innerHTML = getEnhancedPopupText(poi);
+    
+    // Limit popup size
+    let cw = parseInt(btfDiv.clientWidth);
+    if(cw > (window.innerWidth * 0.45)) {
+        cw = (window.innerWidth * 0.45);
+        btfDiv.style.width = cw+'px';
+    }
+    
+    let ch = parseInt(btfDiv.clientHeight);
+    if(ch > (window.innerHeight * 0.80)) {
+        ch = (window.innerHeight * 0.80);
+        btfDiv.style.height = ch+'px';
+        btfDiv.style.overflow = 'scroll';
+    }
+    
+    // Set popup position
+    let iconRect = element.getBoundingClientRect();
+    let viewPortRect = iconsLayer.div.offsetParent.offsetParent.getBoundingClientRect();
+    let left = iconRect.right + btfDivOffset;
+    
+    if (viewPortRect.right-10 < iconRect.right + cw) {
+        left = iconRect.left - btfDivOffset - cw;
+    }
+    
+    let top = iconRect.bottom + btfDivOffset;
+    if (viewPortRect.bottom -100 < iconRect.bottom + ch) {
+        top = iconRect.top - btfDivOffset - ch;
+    }
+    
+    btfDiv.style.top = top + "px";
+    btfDiv.style.left = left + "px";
+    btfDiv.style.visibility = "visible";
+    btfDivVisible = true;
+}
+
+function hidePopup() {
+    if (! mouseInPopup) {
+        btfDiv.style.visibility = "hidden";
+        btfDivVisible = false;
+    }
+}
+
+function checkTypeEnabled(type) {
+    let myConf = JSON.parse(localStorage[prefix]);
+    return myConf[type];
+}
+
+function requestClosures() {
+    if (iconsLayer.getVisibility()) {
+        let extent = uWaze.map.getExtent();
+        let z = uWaze.map.getZoom();
+        if (z >= 11) {
+            let oh = 500;
+            let pLB = new uOpenLayers.Geometry.Point(extent.left - oh, extent.bottom - oh).transform(epsg900913, epsg4326);
+            let pRT = new uOpenLayers.Geometry.Point(extent.right + oh, extent.top + oh).transform(epsg900913, epsg4326);
+            
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: `https://mydrive.api-system.tomtom.com/traffic/services/4/incidentDetails/s2/${pLB.y},${pRT.x},${pRT.y},${pLB.x}/${z}/-1/json?key=sATA9OwG11zrMKQcCxR3eSEjj2n8Jsrg&projection=EPSG4326&language=${language}`,
+                onload: function (response) {
+                    let resp = JSON.parse(response.responseText);
+                    iconsLayer.clearMarkers();
+                    constructionData = resp.tm.poi; // Store data for enhanced functionality
+                    
+                    for (let poi of resp.tm.poi) {
+                        let icontype = 'others';
+                        let img = 'https://upload.wikimedia.org/wikipedia/commons/0/02/Zeichen_101_-_Gefahrstelle%2C_StVO_1970.svg';
+                        
+                        mtotypes.some(element => {
+                            let regex = I18n.t(`${prefix}.regex`)[element.type];
+                            if (poi.d.match(regex)) {
+                                icontype = element.type;
+                                img = element.icon;
+                                return true;
+                            }
+                        });
+                        
+                        if (!checkTypeEnabled(icontype)) {
+                            continue;
+                        }
+                        
+                        let icon = new uOpenLayers.Icon(img, {w: 35, h: 35});
+                        let marker = new uOpenLayers.Marker(new uOpenLayers.LonLat(poi.p.x, poi.p.y).transform(epsg4326, epsg900913), icon);
+                        
+                        marker.events.register('mousedown', marker, function (evt) {
+                            showPopup(poi, evt.element);
+                            uOpenLayers.Event.stop(evt);
+                        });
+                        
+                        marker.events.register('mouseover', marker, function (evt) {
+                            popupID = poi.id;
+                            setTimeout(showPopup, 300, poi, evt.element); // Reduced delay for better UX
+                            uOpenLayers.Event.stop(evt);
+                        });
+                        
+                        marker.events.register('mouseout', marker, function (evt) {
+                            popupID = false;
+                            if (btfDivVisible) {
+                                mouseInPopup = false;
+                                setTimeout(hidePopup, 200);
+                                uOpenLayers.Event.stop(evt);
+                            }
+                        });
+                        
+                        iconsLayer.addMarker(marker);
+                    }
+                }
+            });
+        } else {
+            iconsLayer.clearMarkers();
+        }
+    }
+}
+
+function getCheckbox(idSuffix, iconURL, labelText, title, divCss = {}, labelCss = {}) {
+    let id = `${prefix}-${idSuffix}`;
+    return $('<div>').append(
+        $('<label>', { class: "mto-container" }).append(
+            $('<input>', { id: id, type: 'checkbox', title: title, class: `${prefix}Checkbox` }),
+            $(`<img src="${iconURL}">`),
+            document.createTextNode(labelText)
+        ).css(labelCss)
+    ).css(divCss);
+}
+
+function checkboxChanged(evt) {
+    let myConf = JSON.parse(localStorage[prefix]);
+    myConf[evt.target.id.replace(`${prefix}-`,'') ] = evt.target.checked;
+    localStorage[prefix] = JSON.stringify(myConf);
+    
+    if (evt.target == panelCheckBoxElement) {
+        $(layerCheckBoxElement).click();
+    }
+}
+
+function addSidepanel() {
+    let userTabs = document.getElementById('user-info');
