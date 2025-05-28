@@ -149,8 +149,8 @@ W.userscripts.convertGeoJSONToWkt() function can be used to convert the GeoJSON 
 
 W.userscripts.convertGeoJSONToWkt(geometry: string /* WKT string */): GeoJSON.Geometry;
 
-Waze nutzt WMTS
+Der Waze Map Editor nutzt WMTS
 
-Waze unterstützt kein Vector
+Der Waze Map Editor unterstützt kein Vector
 
 Ausgabe immer als vollständiger code
