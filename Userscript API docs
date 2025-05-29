@@ -157,4 +157,8 @@ Bekannte Probleme:
 "Content Security Policy (CSP) Problem!" 
 Das passiert, weil wir onclick Attribute verwenden, die als unsafe-eval eingestuft werden. Am besten vermeiden
 
+Waze Map Editor Koordinaten System für GPS ist Web Mercator
+
 Ausgabe immer als vollständiger code
+
+
