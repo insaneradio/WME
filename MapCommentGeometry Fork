@@ -1,0 +1,1188 @@
+// ==UserScript==
+// @name 			WME MapCommentGeometry - Multi-Segment
+// @author			YUL_ (erweitert für Multi-Segment)
+// @description 	This script creates a map note around single or multiple selected road segments. It also allows you to create camera or arrow shaped notes.
+// @match			*://*.waze.com/*editor*
+// @exclude			*://*.waze.com/user/editor*
+// @grant 			none
+// @require			https://greasyfork.org/scripts/24851-wazewrap/code/WazeWrap.js
+// @require			https://cdn.jsdelivr.net/gh/WazeSpace/wme-sdk-plus@v1/wme-sdk-plus.js
+// @require			https://cdn.jsdelivr.net/npm/@turf/turf@7/turf.min.js
+// @downloadURL		https://raw.githubusercontent.com/YULWaze/WME-MapCommentGeometry/main/WME%20MapCommentGeometry.user.js
+// @updateURL		https://raw.githubusercontent.com/YULWaze/WME-MapCommentGeometry/main/WME%20MapCommentGeometry.user.js
+// @supportURL		https://github.com/YULWaze/WME-MapCommentGeometry/issues/new/choose
+// @version 		2025.05.30.1-multi
+// ==/UserScript==
+
+/* global W */
+/* global OpenLayers */
+/* ecmaVersion 2017 */
+/* global require */
+/* global $ */
+/* global _ */
+/* global WazeWrap */
+/* eslint curly: ["warn", "multi-or-nest"] */
+
+// Erweitert von YUL_ Script für Multi-Segment Unterstützung
+// Original von YUL_ basierend auf WME Street to River und WME Wazer Creater
+
+(async function () {
+  await SDK_INITIALIZED;
+  const UPDATE_NOTES = "Erweitert für Multi-Segment Unterstützung - Sie können jetzt mehrere Segmente auswählen";
+  const SCRIPT_NAME = GM_info.script.name;
+  const SCRIPT_VERSION = GM_info.script.version;
+  const idTitle = 0;
+  const idNewMapComment = 1;
+  const idExistingMapComment = 2;
+  const wmeSdk = getWmeSdk({ scriptId: "wme-map-comment-geometry-multi", scriptName: "WME Map Comment Geometry Multi" });
+  if (!wmeSdk.State.isInitialized())
+    await wmeSdk.Events.once({ eventName: "wme-initialized" });
+  initWmeSdkPlus(wmeSdk);
+
+  const CameraLeftPoints = [
+    [11, 6],
+    [-4, 6],
+    [-4, 3],
+    [-11, 6],
+    [-11, -6],
+    [-4, -3],
+    [-4, -6],
+    [11, -6],
+  ];
+  const CameraRightPoints = [
+    [-11, 6],
+    [4, 6],
+    [4, 3],
+    [11, 6],
+    [11, -6],
+    [4, -3],
+    [4, -6],
+    [-11, -6],
+  ];
+  const CameraUpPoints = [
+    [6, -11],
+    [6, 4],
+    [3, 4],
+    [6, 11],
+    [-6, 11],
+    [-3, 4],
+    [-6, 4],
+    [-6, -11],
+  ];
+  const CameraDownPoints = [
+    [6, 11],
+    [6, -4],
+    [3, -4],
+    [6, -11],
+    [-6, -11],
+    [-3, -4],
+    [-6, -4],
+    [-6, 11],
+  ];
+
+  const ArrowRightPoints = [
+    [0, -36],
+    [0, -12],
+    [5, -7],
+    [12, -6],
+    [24, -6],
+    [24, -18],
+    [36, 0],
+    [24, 18],
+    [24, 6],
+    [12, 6],
+    [2, 4],
+    [-4, 2],
+    [-8, -2],
+    [-12, -9],
+    [-12, -36],
+  ];
+  const ArrowLeftPoints = [
+    [0, -36],
+    [0, -12],
+    [-5, -7],
+    [-12, -6],
+    [-24, -6],
+    [-24, -18],
+    [-36, 0],
+    [-24, 18],
+    [-24, 6],
+    [-12, 6],
+    [-2, 4],
+    [4, 2],
+    [8, -2],
+    [12, -9],
+    [12, -36],
+  ];
+  const ArrowStraightPoints = [
+    [6, -18],
+    [6, 6],
+    [18, 6],
+    [0, 18],
+    [-18, 6],
+    [-6, 6],
+    [-6, -18],
+  ];
+
+  const DefaultCommentWidth = 10;
+  let TheCommentWidth;
+
+	function hasSelectedFeatures(featureType) {
+		const selection = wmeSdk.Editing.getSelection();
+		if (!selection) return false;
+		return selection.objectType === featureType;
+	}
+
+	function addControlsToMapCommentEditPanel() {
+		if (!hasSelectedFeatures('mapComment')) return;
+
+		const lockRegion = $(".lock-edit-region");
+
+		const createJoystick = (areas, buttons) => {
+			const unassignedAreas = new Set(areas.flat());
+			const maxControlsInRow = areas.reduce((currentMax, row) => Math.max(currentMax, row.length), 0);
+			const cssAreas = areas
+				.map((row) => {
+					if (row.length === maxControlsInRow) return `"${row.join(" ")}" 1fr`;
+
+					const singleAreaUnits = Math.floor(maxControlsInRow / row.length);
+					const availableUnits = maxControlsInRow - singleAreaUnits * row.length;
+
+					return row.reduce((result, currentArea, currentAreaIndex, areas) => {
+						const isLastArea = currentAreaIndex + 1 >= areas.length;
+						const insert = (times) => {
+							for (let i = 0; i < times; i++) result.push(currentArea);
+						};
+
+						insert(singleAreaUnits);
+						if (isLastArea) insert(availableUnits);
+
+						return `"${result.join(" ")}" 1fr`;
+					}, []);
+				})
+				.join(" ");
+
+			const joystickContainer = $('<div style="display: grid; align-items: center;"/>');
+			joystickContainer.css("grid-template", cssAreas);
+
+			const buttonElements = {};
+			buttons.forEach((button) => {
+				const { name, icon, handler, isSelectable = true, flipIconVertically = false } = button;
+				if (!unassignedAreas.has(name)) return;
+				unassignedAreas.delete(name);
+
+				const $icon = $(`<i class="w-icon w-icon-${icon}" />`);
+				if (flipIconVertically) $icon.css("transform", "rotateX(180deg)");
+
+				const $btn = $('<wz-button color="clear-icon" size="sm" />');
+				$btn.css("grid-area", name);
+				if (!isSelectable) {
+					$btn.attr("disabled", true);
+					$icon.css("color", "#000");
+				}
+				$btn.append($icon);
+				$btn.click((e) => e.target.blur());
+				if (handler) $btn.click(handler);
+				joystickContainer.append($btn);
+				buttonElements[name] = $btn;
+			});
+
+			Array.from(unassignedAreas.values()).forEach((area) => {
+				const $dummy = $("<div />");
+				$dummy.css("grid-area", area);
+				joystickContainer.append($dummy);
+			});
+
+			return {
+				root: joystickContainer,
+				buttons: buttonElements,
+			};
+		};
+
+		const DPAD_AREA = {
+			Up: "up",
+			Left: "left",
+			Right: "right",
+			Down: "down",
+			Middle: "middle",
+		};
+		const DPAD_NAV_ICONS = {
+			[DPAD_AREA.Up]: "arrow-up",
+			[DPAD_AREA.Down]: "arrow-down",
+			[DPAD_AREA.Left]: "arrow-left",
+			[DPAD_AREA.Right]: "arrow-right",
+			[DPAD_AREA.Middle]: "recenter",
+		};
+		const createDPadJoystick = (buttons, size = "100%") => {
+			if (buttons.length < 4 || buttons.length > 5) throw new Error("There must be 4 or 5 buttons in a D-Pad");
+
+			buttons.forEach((button) => {
+				button.icon = button.icon || DPAD_NAV_ICONS[button.name];
+			});
+
+			const { root, buttons: buttonElements } = createJoystick(
+				[[DPAD_AREA.Up], [DPAD_AREA.Left, DPAD_AREA.Middle, DPAD_AREA.Right], [DPAD_AREA.Down]],
+				buttons
+			);
+
+			Object.entries(buttonElements).forEach(([btnName, $btn]) => {
+				if (!Object.values(DPAD_AREA).includes(btnName)) return;
+
+				$btn.css("justify-self", "center");
+				$btn.css("width", "fit-content");
+			});
+
+			root.css("aspect-ratio", "1");
+			root.css("max-width", size);
+			root.css("background-color", "var(--surface_default)");
+			root.css("border-radius", "50%");
+			root.css("overflow", "hidden");
+			return root;
+		};
+
+		const createDPadControl = (controlName, buttons, size = "100%") => {
+			const $container = $('<div style="flex: 1" />');
+			$container.append($(`<wz-label style="text-align: center">${controlName}</wz-label>`));
+			$container.append(createDPadJoystick(buttons, size));
+			return $container;
+		};
+
+		const joysticksContainers = $('<div class="form-group" style="display: flex; gap: 12px" />');
+		joysticksContainers.append(
+			createDPadControl("Cameras", [
+				{ name: DPAD_AREA.Up, handler: createUCamera },
+				{ name: DPAD_AREA.Down, handler: createDCamera },
+				{ name: DPAD_AREA.Left, handler: createLCamera },
+				{ name: DPAD_AREA.Right, handler: createRCamera },
+				{ name: DPAD_AREA.Middle, handler: () => null, isSelectable: false, icon: "speed-camera" },
+			])
+		);
+		joysticksContainers.append(
+			createDPadControl("Arrows", [
+				{ name: DPAD_AREA.Up, handler: createSArrow },
+				{ name: "DUMMY", handler: () => null, isSelectable: false },
+				{ name: DPAD_AREA.Left, icon: "turn-left", handler: createLArrow },
+				{ name: DPAD_AREA.Right, icon: "turn-right", handler: createRArrow },
+				{ name: DPAD_AREA.Middle, icon: "pencil", handler: createCustomArrow },
+			])
+		);
+
+		lockRegion.before(joysticksContainers);
+	}
+
+  async function waitForMapCommentSelection() {
+    if (hasSelectedFeatures('mapComment')) return wmeSdk.Editing.getSelection().ids[0];
+
+    await wmeSdk.Events.once({
+      eventName: "wme-selection-changed",
+    });
+
+    if (hasSelectedFeatures('mapComment')) return wmeSdk.Editing.getSelection().ids[0];
+    return null;
+  }
+
+  function convertLineToArrow(line) {
+    const lastPoint = line.coordinates[line.coordinates.length - 1];
+    const secondLastPoint = line.coordinates[line.coordinates.length - 2];
+    const direction = turf.bearing(turf.point(secondLastPoint), turf.point(lastPoint));
+
+    const arrowSize = 10; // Arrow size in meters
+    const leftWing = turf.destination(turf.point(lastPoint), arrowSize, direction + 90, { units: "meters" });
+    const rightWing = turf.destination(turf.point(lastPoint), arrowSize, direction - 90, { units: "meters" });
+
+    const surroundedLine = turf.buffer(line, arrowSize / 3, { units: "meters", steps: 4 });
+
+    const arrowHead = turf.polygon([
+      [
+        lastPoint,
+        leftWing.geometry.coordinates,
+        turf.destination(turf.point(lastPoint), arrowSize, direction, { units: "meters" }).geometry.coordinates,
+        rightWing.geometry.coordinates,
+        lastPoint,
+      ],
+    ]);
+
+    return turf.union(turf.featureCollection([surroundedLine, arrowHead])).geometry;
+  }
+
+  function updateSelectedFeatureGeometry(newGeometry) {
+    const selection = wmeSdk.Editing.getSelection();
+    if (!selection) {
+      console.warn('updateSelectedFeatureGeometry has been called without active selection');
+      return false;
+    }
+
+    if (selection.ids.length > 1) {
+      console.warn('updateSelectedFeatureGeometry has been called with multiple selected objects, only the first one will be updated');
+    }
+
+    switch (selection.objectType) {
+      case 'mapComment':
+        wmeSdk.DataModel.MapComments.updateMapComment({
+          mapCommentId: selection.ids[0].toString(),
+          geometry: newGeometry,
+        });
+        break;
+      case 'permanentHazard':
+        updatePermanentHazard(selection.ids[0], { geometry: newGeometry });
+        break;
+      case 'venue':
+        wmeSdk.DataModel.Venues.updateVenue({
+          venueId: selection.ids[0].toString(),
+          geometry: newGeometry,
+        });
+      default:
+        console.error('updateSelectedFeatureGeometry has been called but the selected feature is not supported: ' + selection.objectType);
+        return false;
+    }
+
+    return true;
+  }
+
+  function getGeometryOfSelection() {
+    const selection = wmeSdk.Editing.getSelection();
+    if (!selection) return null;
+
+    if (selection.ids.length > 1) {
+      console.warn('getGeometryOfSelection has been called with multiple selected objects, only the first one will be returned');
+    }
+
+    switch (selection.objectType) {
+      case 'mapComment':
+        return wmeSdk.DataModel.MapComments.getById({ mapCommentId: selection.ids[0].toString() }).geometry;
+      case 'permanentHazard':
+        return getPermanentHazard(selection.ids[0]).geometry;
+      default:
+        console.warn('getGeometryOfSelection has been called but the selected feature is not supported: ' + selection.objectType);
+        return null;
+    }
+  }
+
+  function applyShapeToSelectedFeature(shapePoints) {
+    const geometryCentroid = turf.centroid(getGeometryOfSelection()).geometry;
+    const openLayersCentroid = W.userscripts.toOLGeometry(geometryCentroid);
+    updateSelectedFeatureGeometry(getShapeWKT(shapePoints, openLayersCentroid));
+  }
+
+  function createLCamera() {
+    applyShapeToSelectedFeature(CameraLeftPoints);
+  }
+  function createUCamera() {
+    applyShapeToSelectedFeature(CameraUpPoints);
+  }
+  function createRCamera() {
+    applyShapeToSelectedFeature(CameraRightPoints);
+  }
+  function createDCamera() {
+    applyShapeToSelectedFeature(CameraDownPoints);
+  }
+
+  function createLArrow() {
+    applyShapeToSelectedFeature(ArrowLeftPoints);
+  }
+  function createSArrow() {
+    applyShapeToSelectedFeature(ArrowStraightPoints);
+  }
+  function createRArrow() {
+    applyShapeToSelectedFeature(ArrowRightPoints);
+  }
+  async function createCustomArrow() {
+    const drawnLine = await wmeSdk.Map.drawLine();
+    const curvedLine = turf.bezierSpline(drawnLine, { sharpness: 0.1 }).geometry;
+    const arrowGeometry = convertLineToArrow(curvedLine);
+    updateSelectedFeatureGeometry(arrowGeometry);
+  }
+
+  function getShapeWKT(points, center) {
+    if (!center) {
+      if (!WazeWrap.hasMapCommentSelected()) throw new Error("No map comment selected and no center provided");
+      const mapComment = WazeWrap.getSelectedDataModelObjects()[0];
+      center = mapComment.getOLGeometry().getCentroid();
+    }
+
+    let wktText = "POLYGON((";
+    for (let i = 0; i < points.length; i++) {
+      wktText += `${center.x + points[i][0]} ${center.y + points[i][1]},`;
+    }
+    wktText = wktText.slice(0, -1);
+    wktText += "))";
+    return W.userscripts.toGeoJSONGeometry(OpenLayers.Geometry.fromWKT(wktText));
+  }
+
+  function WMEMapCommentGeometry_bootstrap() {
+    var wazeapi = W || window.W;
+    if (!wazeapi || !wazeapi.map || !WazeWrap.Interface) {
+      setTimeout(WMEMapCommentGeometry_bootstrap, 1000);
+      return;
+    }
+
+    WMEMapCommentGeometry_init();
+  }
+
+  function createSnackbar(options) {
+    const { label, button, closeAutomatically = true, showCloseButton = true } = options;
+
+    const $snackbarContainer = $('<wz-snackbar></wz-snackbar>')
+    if (!showCloseButton) $snackbarContainer.attr('close-button', false);
+    if (!closeAutomatically) $snackbarContainer.attr('close-automatically', false);
+    $snackbarContainer.attr('align', 'center');
+    $snackbarContainer.css('--wz-snackbar-position', 'absolute');
+
+    const $textWrapper = $('<span></span>');
+    $textWrapper.addClass('text-wrapper');
+    $textWrapper.text(label);
+
+    $snackbarContainer.append($textWrapper);
+
+    let $btn = null;
+    if (button) {
+      const { label, onClick } = button;
+
+      const $snackbarActions = $('<wz-snackbar-actions></wz-snackbar-actions>');
+      $btn = $('<wz-button></wz-button>');
+      $btn.attr('color', 'text');
+      $btn.text(label);
+      if (onClick) $btn.click(onClick);
+      $snackbarActions.append($btn);
+
+      $snackbarContainer.append($snackbarActions);
+    }
+
+
+    $('#map-message-container').append($snackbarContainer);
+    return {
+      show: () => $snackbarContainer[0].showSnackbar(),
+      hide: () => $snackbarContainer[0].hideSnackbar(),
+      remove: () => $snackbarContainer.remove(),
+      button: $btn?.[0] || null,
+    }
+  }
+
+  function waitForEvent(element, eventName) {
+    return new Promise((resolve) => {
+      element.addEventListener(eventName, () => resolve(), { once: true });
+    });
+  }
+
+  function getPermanentHazard(permanentHazardId) {
+    const getters = {
+      'camera': () => wmeSdk.DataModel.PermanentHazards.getCameraById({ cameraId: permanentHazardId }),
+      'schoolZone': () => wmeSdk.DataModel.PermanentHazards.getSchoolZoneById({ schoolZoneId: permanentHazardId }),
+    };
+
+    const values = Object.entries(getters).map(([subtype, getter]) => {
+      return [subtype, getter()];
+    }).filter(([, value]) => !!value);
+
+    if (values.length > 0) {
+      console.warn('ambiguous result found in getPermanentHazard, returning the first one');
+    }
+
+    const [type, permanentHazard] = values[0];
+    return {
+      type,
+      permanentHazard,
+    };
+  }
+
+  function updatePermanentHazard(permanentHazardId, args) {
+    const { type } = getPermanentHazard(permanentHazardId);
+
+    switch (type) {
+      case 'schoolZone':
+        wmeSdk.DataModel.PermanentHazards.updateSchoolZone({
+          schoolZoneId: permanentHazardId,
+          ...args,
+        });
+        break;
+      default:
+        console.error('updatePermanentHazard has been called but the given permanent hazard is not supported: ' + type);
+        break;
+    }
+  }
+
+  function WMEMapCommentGeometry_init() {
+    try {
+      let updateMonitor = new WazeWrap.Alerts.ScriptUpdateMonitor(
+        SCRIPT_NAME,
+        SCRIPT_VERSION,
+        "https://raw.githubusercontent.com/YULWaze/WME-MapCommentGeometry/main/WME%20MapCommentGeometry.user.js",
+        GM_xmlhttpRequest
+      );
+      updateMonitor.start();
+    } catch (ex) {
+      console.log(ex.message);
+    }
+
+    var langText;
+
+    function addWMESelectSegmentbutton() {
+      if (!wmeSdk.Editing.getSelection()) return;
+
+      // Entferne vorhandene UI-Elemente bei Änderung der Auswahl
+      const existingElement = document.getElementById("MapCommentGeo");
+      if (existingElement) {
+        existingElement.remove();
+      }
+
+      function getFeatureHumanReadableName(type) {
+        const defaultSymbol = Symbol.for('DEFAULT');
+        const names = {
+          segment: 'road',
+          mapComment: 'map note',
+          permanentHazard: {
+            [defaultSymbol]: 'hazard',
+            camera: 'camera',
+            schoolZone: 'school zone',
+          },
+          venue: 'place',
+          [defaultSymbol]: 'feature',
+        };
+
+        const parts = type.split('.');
+        let current = names;
+        for (const part of parts) {
+          if (!current[part]) return current[defaultSymbol] || names[defaultSymbol];
+          current = current[part];
+        }
+
+        return current[defaultSymbol] || current;
+      }
+
+      function getFeatureGeometryOptions(type) {
+        const defaultSymbol = Symbol.for('DEFAULT');
+        const options = {
+          permanentHazard: {
+            [defaultSymbol]: {
+              strictBoundary: true,
+            },
+          },
+          [defaultSymbol]: {},
+        };
+
+        const parts = type.split('.');
+        let current = options;
+        for (const part of parts) {
+          if (!current[part]) return current[defaultSymbol] || options[defaultSymbol];
+          current = current[part];
+        }
+
+        return current[defaultSymbol] || current;
+      }
+
+      const createNewFeatureButton = (featureType, addNewFeature, geometryOptions) => {
+        const $createBtn = $(
+          `<wz-button style="--space-button-text: 100%;" size="sm" color="text">Create ${getFeatureHumanReadableName(featureType)}</wz-button>`
+        );
+        $createBtn.click((e) => e.target.blur());
+        $createBtn.click(() => {
+          const geometry = getGeometryOfSelection(geometryOptions);
+          const newFeature = addNewFeature(geometry);
+          wmeSdk.Editing.setSelection({
+            selection: {
+              ids: [newFeature.id],
+              objectType: newFeature.type,
+            },
+          });
+        });
+
+        return $createBtn;
+      }
+
+      // Add dropdown for comment width
+      const selCommentWidth = $('<wz-select id="CommentWidth" style="flex: 1" />');
+      selCommentWidth.append($('<wz-option value="SEG_WIDTH">Infer</wz-option>'));
+      selCommentWidth.append($('<wz-option value="5">5 m</wz-option>'));
+      selCommentWidth.append($('<wz-option value="10">10 m</wz-option>'));
+      selCommentWidth.append($('<wz-option value="15">15 m</wz-option>'));
+      selCommentWidth.append($('<wz-option value="20">20 m</wz-option>'));
+      selCommentWidth.append($('<wz-option value="25">25 m</wz-option>'));
+      const widthToSelect = getLastCommentWidth(NaN);
+      selCommentWidth.attr("value", isNaN(widthToSelect) ? "SEG_WIDTH" : widthToSelect);
+      const selCommentWidthStyles = new CSSStyleSheet();
+      selCommentWidthStyles.replaceSync(".wz-select { min-width: initial !important }");
+      selCommentWidth[0].shadowRoot.adoptedStyleSheets.push(selCommentWidthStyles);
+
+      // Add MapCommentGeo section
+      const rootContainer = $('<div id="MapCommentGeo" />');
+
+      // Multi-Segment Info und Controls immer anzeigen
+      const selection = wmeSdk.Editing.getSelection();
+      if (selection && selection.objectType === "segment") {
+        const segmentCount = selection.ids.length;
+        const infoText = segmentCount === 1
+          ? "1 Segment ausgewählt"
+          : `${segmentCount} Segmente ausgewählt`;
+
+        const segmentInfo = $(`<div style="background: #e8f5e8; padding: 8px; border-radius: 4px; margin-bottom: 8px; font-size: 12px; color: #2d5a2d;"><strong>Multi-Segment Support:</strong><br>${infoText}<br><small>Tipp: Verwenden Sie Strg+Klick um mehrere Segmente auszuwählen</small></div>`);
+        rootContainer.append(segmentInfo);
+      }
+
+      // Versuche verschiedene Container zu finden, je nachdem ob ein oder mehrere Segmente ausgewählt sind
+      let targetContainer = null;
+
+      // Für einzelne Segmente
+      if ($("#segment-edit-general").length > 0) {
+        targetContainer = $("#segment-edit-general");
+      }
+      // Für mehrere Segmente - suche nach dem Multi-Selection Panel
+      else if ($(".multi-segment-edit").length > 0) {
+        targetContainer = $(".multi-segment-edit");
+      }
+      // Fallback: suche nach anderen möglichen Containern
+      else if ($(".segment-edit").length > 0) {
+        targetContainer = $(".segment-edit");
+      }
+      else if ($(".edit-panel").length > 0) {
+        targetContainer = $(".edit-panel");
+      }
+      // Letzter Fallback: erstelle einen schwebenden Container
+      else {
+        console.log("Kein geeigneter Container gefunden, erstelle schwebenden Container");
+        createFloatingPanel(rootContainer);
+        return;
+      }
+
+      // Add comment width to section
+      rootContainer.append($("<wz-label>Element Width</wz-label>"));
+      const mapNoteWidthControls = $('<div style="display: flex; flex-wrap: wrap; gap: 4px 12px;" />');
+      mapNoteWidthControls.append(selCommentWidth);
+
+      const $useBtn = $(
+        `<wz-button style="--space-button-text: 100%;" size="sm" color="text">${getString(
+          idExistingMapComment
+        )}</wz-button>`
+      );
+      $useBtn.click((e) => e.target.blur());
+      $useBtn.click(async (e) => {
+        e.target.blur();
+        e.target.disabled = true;
+        const snackbar = createSnackbar({
+          label: `Select an existing object to update its geometry`,
+          closeAutomatically: false,
+          showCloseButton: false,
+          button: {
+            label: 'Cancel',
+          }
+        });
+        snackbar.show();
+
+        const segmentsLineString = getSelectedSegmentsMergedLineString();
+        const userSelectedWidth = getUserSelectedWidth();
+
+        try {
+          await Promise.race([
+            wmeSdk.Events.once({
+              eventName: "wme-selection-changed",
+            }),
+            waitForEvent(snackbar.button, 'click').then(() => {
+              throw new Error('CANCELLED');
+            }),
+          ]);
+
+          const selection = wmeSdk.Editing.getSelection();
+          if (!selection) return;
+
+        const selectionGeometry = getGeometryForLineString(segmentsLineString, {
+          width: userSelectedWidth,
+          ...getFeatureGeometryOptions(selection.objectType)
+        });
+        const isUpdated = updateSelectedFeatureGeometry(selectionGeometry);
+          if (!isUpdated) {
+            const snackbar = createSnackbar({
+              label: `Unable to update the ${getFeatureHumanReadableName(selection.objectType)}`,
+            });
+            snackbar.show();
+            setTimeout(() => {
+              snackbar.remove();
+            }, 5000);
+          }
+        } catch (e) {
+          if (!(e instanceof Error)) throw e;
+          if (e.message !== 'CANCELLED') throw e;
+        } finally {
+          e.target.disabled = false;
+          snackbar.remove();
+        }
+      });
+      mapNoteWidthControls.append(
+        $useBtn,
+        createNewFeatureButton('mapComment', (geometry) => {
+          return {
+            type: 'mapComment',
+            id: wmeSdk.DataModel.MapComments.addMapComment({
+              geometry,
+            }),
+          }
+        }, getFeatureGeometryOptions('mapComment')),
+        createNewFeatureButton('venue', (geometry) => {
+          return {
+            type: 'venue',
+            id: wmeSdk.DataModel.Venues.addVenue({
+              category: 'OTHER',
+              geometry,
+            }),
+          }
+        }, getFeatureGeometryOptions('venue')),
+        createNewFeatureButton('permanentHazard.schoolZone', (geometry) => {
+          return {
+            type: 'permanentHazard',
+            id: wmeSdk.DataModel.PermanentHazards.addSchoolZone({
+              geometry,
+            }),
+          }
+        }, getFeatureGeometryOptions('permanentHazard.schoolZone')),
+      );
+
+      rootContainer.append(mapNoteWidthControls);
+
+      // Füge Container zum gefundenen Ziel hinzu
+      if (targetContainer) {
+        targetContainer.append(rootContainer);
+      }
+
+      WazeWrap.Interface.ShowScriptUpdate(SCRIPT_NAME, SCRIPT_VERSION, UPDATE_NOTES, "");
+      console.log("WME MapCommentGeometry - Multi-Segment erweitert");
+    }
+
+    // Neue Funktion für schwebenden Panel als Fallback
+    function createFloatingPanel(contentContainer) {
+      // Entferne vorhandenes schwebendes Panel
+      $("#floating-mapcomment-panel").remove();
+
+      const floatingPanel = $(`
+        <div id="floating-mapcomment-panel" style="
+          position: fixed;
+          top: 120px;
+          right: 20px;
+          background: white;
+          border: 2px solid #4a90e2;
+          border-radius: 8px;
+          padding: 12px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          z-index: 10000;
+          max-width: 300px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        ">
+          <div style="
+            background: #4a90e2;
+            color: white;
+            padding: 8px 12px;
+            margin: -12px -12px 12px -12px;
+            border-radius: 6px 6px 0 0;
+            font-weight: bold;
+            cursor: move;
+          " class="drag-handle">
+            🗺️ MapComment Geometry
+            <span style="float: right; cursor: pointer; user-select: none;" class="close-btn">×</span>
+          </div>
+        </div>
+      `);
+
+      floatingPanel.find('.drag-handle').append(contentContainer);
+      $('body').append(floatingPanel);
+
+      // Schließen-Funktionalität
+      floatingPanel.find('.close-btn').click(() => {
+        floatingPanel.remove();
+      });
+
+      // Drag-Funktionalität
+      let isDragging = false;
+      let dragOffset = { x: 0, y: 0 };
+
+      floatingPanel.find('.drag-handle').on('mousedown', function(e) {
+        if ($(e.target).hasClass('close-btn')) return;
+        isDragging = true;
+        dragOffset.x = e.clientX - floatingPanel.offset().left;
+        dragOffset.y = e.clientY - floatingPanel.offset().top;
+        $(document).on('mousemove.drag', function(e) {
+          if (isDragging) {
+            floatingPanel.css({
+              left: e.clientX - dragOffset.x,
+              top: e.clientY - dragOffset.y
+            });
+          }
+        });
+        $(document).on('mouseup.drag', function() {
+          isDragging = false;
+          $(document).off('mousemove.drag mouseup.drag');
+        });
+      });
+    }
+
+    // Verbesserte Segment-Pfad-Funktion für bessere Verbindung mehrerer Segmente
+    function getSegmentsPath(segmentIds, getSegment, getConnectedSegments) {
+      if (segmentIds.length === 1) {
+        return [{ segmentId: segmentIds[0], direction: "fwd" }];
+      }
+
+      // Für mehrere Segmente: Finde den besten Pfad durch alle Segmente
+      const visitedSegments = new Set();
+      const segmentConnections = new Map();
+
+      // Erstelle eine Karte aller Verbindungen zwischen den ausgewählten Segmenten
+      segmentIds.forEach(segmentId => {
+        const segment = getSegment(segmentId);
+        segmentConnections.set(segmentId, {
+          fromNodeId: segment.fromNodeId,
+          toNodeId: segment.toNodeId,
+          segment: segment
+        });
+      });
+
+      // Finde Startsegment (eins mit nur einer Verbindung zu anderen ausgewählten Segmenten)
+      let startSegmentId = segmentIds[0];
+      let bestConnectionCount = Infinity;
+
+      for (const segmentId of segmentIds) {
+        const { fromNodeId, toNodeId } = segmentConnections.get(segmentId);
+        let connectionCount = 0;
+
+        // Zähle Verbindungen zu anderen ausgewählten Segmenten
+        [fromNodeId, toNodeId].forEach(nodeId => {
+          const connectedSegments = getConnectedSegments(nodeId);
+          const connectedSelectedSegments = connectedSegments.filter(id =>
+            segmentIds.includes(id) && id !== segmentId
+          );
+          connectionCount += connectedSelectedSegments.length;
+        });
+
+        if (connectionCount < bestConnectionCount) {
+          bestConnectionCount = connectionCount;
+          startSegmentId = segmentId;
+        }
+      }
+
+      const result = [];
+      const queue = [{ segmentId: startSegmentId, direction: "fwd", fromNode: null }];
+
+      while (queue.length > 0 && visitedSegments.size < segmentIds.length) {
+        const { segmentId, direction, fromNode } = queue.shift();
+
+        if (visitedSegments.has(segmentId)) continue;
+        visitedSegments.add(segmentId);
+
+        const segmentInfo = segmentConnections.get(segmentId);
+        let finalDirection = direction;
+
+        // Bestimme die richtige Richtung basierend auf dem vorherigen Knoten
+        if (fromNode !== null) {
+          if (fromNode === segmentInfo.fromNodeId) {
+            finalDirection = "fwd";
+          } else if (fromNode === segmentInfo.toNodeId) {
+            finalDirection = "rev";
+          }
+        }
+
+        result.push({ segmentId, direction: finalDirection });
+
+        // Finde nächste verbundene Segmente
+        const currentEndNode = finalDirection === "fwd" ? segmentInfo.toNodeId : segmentInfo.fromNodeId;
+        const connectedSegments = getConnectedSegments(currentEndNode);
+
+        connectedSegments.forEach(connectedSegmentId => {
+          if (segmentIds.includes(connectedSegmentId) && !visitedSegments.has(connectedSegmentId)) {
+            queue.push({
+              segmentId: connectedSegmentId,
+              direction: "fwd",
+              fromNode: currentEndNode
+            });
+          }
+        });
+      }
+
+      // Füge alle nicht verbundenen Segmente am Ende hinzu
+      segmentIds.forEach(segmentId => {
+        if (!visitedSegments.has(segmentId)) {
+          result.push({ segmentId, direction: "fwd" });
+        }
+      });
+
+      return result;
+    }
+
+    function mergeSegmentsGeometry(segmentIds) {
+      if (!segmentIds || segmentIds.length === 0) {
+        console.error('Keine Segmente zum Verarbeiten vorhanden');
+        return null;
+      }
+
+      if (segmentIds.length === 1) {
+        // Einzelnes Segment - einfache Behandlung
+        const segment = wmeSdk.DataModel.Segments.getById({ segmentId: segmentIds[0] });
+        return segment.geometry;
+      }
+
+      // Mehrere Segmente - verbinde sie intelligent
+      const segmentsPath = getSegmentsPath(
+        segmentIds,
+        (segmentId) => wmeSdk.DataModel.Segments.getById({ segmentId }),
+        (nodeId) => wmeSdk.DataModel.Nodes.getById({ nodeId }).connectedSegmentIds
+      );
+
+      const allCoordinates = [];
+
+      segmentsPath.forEach(({ segmentId, direction }, index) => {
+        const segment = wmeSdk.DataModel.Segments.getById({ segmentId });
+        let segmentGeometry = [...segment.geometry.coordinates];
+
+        if (direction === "rev") {
+          segmentGeometry.reverse();
+        }
+
+        // Für das erste Segment, füge alle Punkte hinzu
+        if (index === 0) {
+          allCoordinates.push(...segmentGeometry);
+        } else {
+          // Für nachfolgende Segmente, überspringe den ersten Punkt um Duplikate zu vermeiden
+          // Es sei denn, die Segmente sind nicht verbunden
+          const lastCoordinate = allCoordinates[allCoordinates.length - 1];
+          const firstCoordinate = segmentGeometry[0];
+
+          // Prüfe ob die Segmente verbunden sind (gleiche Koordinaten)
+          const isConnected = lastCoordinate &&
+            Math.abs(lastCoordinate[0] - firstCoordinate[0]) < 0.000001 &&
+            Math.abs(lastCoordinate[1] - firstCoordinate[1]) < 0.000001;
+
+          if (isConnected) {
+            // Segmente sind verbunden, überspringe ersten Punkt
+            allCoordinates.push(...segmentGeometry.slice(1));
+          } else {
+            // Segmente sind nicht verbunden, verbinde sie mit einer Linie
+            allCoordinates.push(...segmentGeometry);
+          }
+        }
+      });
+
+      return {
+        type: 'LineString',
+        coordinates: allCoordinates,
+      };
+    }
+
+    function getGeometryForLineString(lineString, options) {
+      if (!lineString || !lineString.coordinates) {
+        console.error('Ungültige LineString Geometrie');
+        return null;
+      }
+
+      if (options.strictBoundary && turf.length(lineString, { units: 'meters' }) > options.width) {
+        lineString = turf.lineSliceAlong(
+          lineString,
+          options.width / 2 + 1,
+          turf.length(lineString, { units: 'meters' }) - options.width / 2 - 1,
+          { units: 'meters' },
+        );
+      }
+
+      return convertToLandmark(lineString, options.width);
+    }
+
+    function ensureMetricUnits(value) {
+      if (!value) return null;
+
+      const userSettings = wmeSdk.Settings.getUserSettings();
+      if (userSettings && !userSettings.isImperial) return value;
+
+      const conversionFactor = 0.3048; // 1 foot = 0.3048 meters
+      return Math.round(value * conversionFactor);
+    }
+
+    function getSegmentWidth(segmentId) {
+      const segment = wmeSdk.DataModel.Segments.getById({ segmentId });
+      if (!segment) {
+        console.error(`Segment with ID ${segmentId} not found.`);
+        return null;
+      }
+
+      const segmentAddress = wmeSdk.DataModel.Segments.getAddress({ segmentId });
+      const defaultLaneWidth =
+        (segmentAddress.country.defaultLaneWidthPerRoadType
+          ? segmentAddress.country.defaultLaneWidthPerRoadType[segment.roadType]
+          : 330) / 100;
+
+      const averageNumberOfLanes =
+        ((segment.fromLanesInfo?.numberOfLanes || 1) + (segment.toLanesInfo?.numberOfLanes || 1)) / 2;
+      const averageLaneWidth =
+        ((ensureMetricUnits(segment.fromLanesInfo?.laneWidth) || defaultLaneWidth) +
+          (ensureMetricUnits(segment.toLanesInfo?.laneWidth) || defaultLaneWidth)) /
+        2;
+      return averageLaneWidth * averageNumberOfLanes;
+    }
+
+    function getWidthOfSegments(segmentIds) {
+      const widths = segmentIds.map((segmentId) => getSegmentWidth(segmentId)).filter(w => w !== null);
+      if (widths.length === 0) return DefaultCommentWidth;
+
+      const averageWidth = widths.reduce((sum, width) => sum + width, 0) / widths.length;
+      return Math.round(averageWidth);
+    }
+
+    function getSelectedSegmentsMergedLineString() {
+      const selection = wmeSdk.Editing.getSelection();
+      if (!selection || selection.objectType !== "segment") {
+        console.error('getSelectedSegmentsMergedLineString has been called without active segment selection');
+        return null;
+      }
+
+      return mergeSegmentsGeometry(selection.ids);
+    }
+
+    function getGeometryOfSelection(options = {}) {
+      const selection = wmeSdk.Editing.getSelection();
+      if (!selection || selection.objectType !== "segment") {
+        console.error('getGeometryOfSelection requires segment selection');
+        return null;
+      }
+
+      if (!options.width || isNaN(options.width)) {
+        options.width = getUserSelectedWidth();
+      }
+
+      console.log(`Comment width: ${options.width} für ${selection.ids.length} Segment(e)`);
+
+      const lineString = getSelectedSegmentsMergedLineString();
+      if (!lineString) return null;
+
+      return getGeometryForLineString(lineString, options);
+    }
+
+    function getUserSelectedWidth() {
+      const selCommentWidth = document.getElementById("CommentWidth");
+      if (!selCommentWidth) return DefaultCommentWidth;
+
+      if (selCommentWidth.value === "SEG_WIDTH") {
+        const selection = wmeSdk.Editing.getSelection();
+        if (!selection || selection.objectType !== "segment") {
+          console.error("No road selected!");
+          return DefaultCommentWidth;
+        }
+
+        const width = getWidthOfSegments(selection.ids);
+        setlastCommentWidth(NaN);
+        return width;
+      } else {
+        const width = parseInt(selCommentWidth.value, 10);
+        setlastCommentWidth(width);
+        return width;
+      }
+    }
+
+    /**
+     * Converts a GeoJSON geometry (usually a LineString) to a Landmark (Polygon) geometry.
+     * @param geometry The GeoJSON geometry to convert.
+     * @param width The width (in meters) of the landmark.
+     */
+    function convertToLandmark(geometry, width = DefaultCommentWidth) {
+      if (!geometry || !geometry.coordinates) {
+        console.error('Invalid geometry for convertToLandmark');
+        return null;
+      }
+
+      try {
+        return turf.buffer(geometry, width / 2, { units: "meters" }).geometry;
+      } catch (error) {
+        console.error('Error creating buffer:', error);
+        // Fallback: erstelle ein einfaches Rechteck um die Geometrie
+        const bbox = turf.bbox(geometry);
+        const padding = width / 2 / 111320; // Approximation für Grad
+        return turf.bboxPolygon([
+          bbox[0] - padding, bbox[1] - padding,
+          bbox[2] + padding, bbox[3] + padding
+        ]).geometry;
+      }
+    }
+
+    // 2013-06-09: Save current comment Width
+    function setlastCommentWidth(CommentWidth) {
+      if (typeof Storage !== "undefined") {
+        if (!CommentWidth || isNaN(CommentWidth)) {
+          sessionStorage.removeItem("CommentWidth");
+        } else {
+          sessionStorage.CommentWidth = Number(CommentWidth);
+        }
+      } else {
+        console.log("No web storage support");
+      }
+    }
+
+    // 2013-06-09: Returns last saved comment width
+    function getLastCommentWidth(CommentWidth) {
+      if (typeof Storage !== "undefined") {
+        if (sessionStorage.CommentWidth) return Number(sessionStorage.CommentWidth);
+        else return Number(CommentWidth);
+      } else {
+        return Number(CommentWidth);
+      }
+    }
+
+    // 2014-06-05: Returns WME interface language
+    function getLanguage() {
+      var wmeLanguage;
+      var urlParts;
+      urlParts = location.pathname.split("/");
+      wmeLanguage = urlParts[1].toLowerCase();
+      if (wmeLanguage === "editor") {
+        wmeLanguage = "us";
+      }
+      return wmeLanguage;
+    }
+
+    // 2014-06-05: Translate text to different languages
+    function intLanguageStrings() {
+      switch (getLanguage()) {
+        default: // 2014-06-05: English
+          langText = new Array("Select a road and click this button.", "Create New", "Use Existing");
+      }
+    }
+
+    // 2014-06-05: Returns the translated string to current language
+    function getString(stringID) {
+      return langText[stringID];
+    }
+
+    intLanguageStrings();
+
+    // Event Handler für Auswahl-Änderungen
+    function handleSelectionChange() {
+      // Kleine Verzögerung, damit WME das UI aktualisieren kann
+      setTimeout(() => {
+        const currentSelection = wmeSdk.Editing.getSelection();
+        if (currentSelection && currentSelection.objectType === "segment") {
+          addWMESelectSegmentbutton();
+        } else if (currentSelection && currentSelection.objectType === "mapComment") {
+          addControlsToMapCommentEditPanel();
+        } else {
+          // Entferne schwebendes Panel wenn keine relevante Auswahl
+          $("#floating-mapcomment-panel").remove();
+        }
+      }, 100);
+    }
+
+    const addFeatureEditorOpenedHandler = (featureType, handler) => {
+      wmeSdk.Events.on({
+        eventName: "wme-feature-editor-opened",
+        eventHandler: (e) => {
+          if (e.featureType !== featureType) return;
+          handler(e);
+        }
+      });
+    }
+
+    // Event Handler hinzufügen
+    addFeatureEditorOpenedHandler('segment', addWMESelectSegmentbutton);
+    addFeatureEditorOpenedHandler('mapComment', addControlsToMapCommentEditPanel);
+
+    // Zusätzlicher Event Handler für Auswahl-Änderungen
+    wmeSdk.Events.on({
+      eventName: "wme-selection-changed",
+      eventHandler: handleSelectionChange
+    });
+
+    // Initiale Prüfung der aktuellen Auswahl
+    handleSelectionChange();
+  }
+
+  WMEMapCommentGeometry_bootstrap();
+})();
