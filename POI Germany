@@ -1,0 +1,1111 @@
+// ==UserScript==
+// @name WME Internationale Vorwahl DE - Erweitert mit Company Name Cleaning & POI Standardization
+// @version 2025.06.03
+// @description Wandelt Telefonnummern automatisch in internationale Formate um, bereinigt deutsche Firmen-Rechtsformen und standardisiert POI-Namen nach Waze Guidelines - mit Einstellungen
+// @author Hiwi234 (erweitert)
+// @namespace https://greasyfork.org/de/users/863740-horst-wittlich
+// @match https://www.waze.com/editor*
+// @match https://www.waze.com/*/editor*
+// @match https://beta.waze.com/editor*
+// @match https://beta.waze.com/*/editor*
+// @grant none
+// @license MIT
+// ==/UserScript==
+/* global W */
+(function() {
+'use strict';
+
+const SCRIPT_ID = 'wme-phone-formatter';
+
+// Default settings
+let settings = {
+    countryCode: '+49',
+    countryNumericCode: '0049',
+    enabled: true,
+    autoRemoveHttps: true,
+    customPatterns: [],
+    companyNameCleaning: true,
+    autoCleaningEnabled: false,
+    poiStandardization: true
+};
+
+// Standardized POI names from Waze community guidelines
+const STANDARDIZED_POI_NAMES = {
+    // Auto Dienstleistungen - Tankstellen
+    'agip': 'Agip',
+    'allguth': 'Allguth',
+    'aral': 'Aral',
+    'avia': 'AVIA',
+    'avex': 'AVEX',
+    'bageno': 'BAGEno',
+    'bavaria petrol': 'BAVARIA petrol',
+    'baywa': 'BayWa',
+    'bell oil': 'Bell Oil',
+    'bergler': 'Bergler',
+    'bft': 'bft',
+    'bk': 'BK',
+    'calpam': 'Calpam',
+    'classic': 'CLASSIC',
+    'elan': 'ELAN',
+    'esso': 'Esso',
+    'go': 'GO',
+    'hem': 'HEM',
+    'jet': 'JET',
+    'markant tankstelle': 'Markant',
+    'oil!': 'OIL!',
+    'oktan': 'OKTAN',
+    'orlen': 'ORLEN',
+    'raiffeisen': 'Raiffeisen',
+    'shell': 'Shell',
+    'star': 'star',
+    'totalenergies': 'TotalEnergies',
+    'tramin': 'Tramin',
+    'v-markt': 'V-Markt',
+    'vr plus energie': 'VR PLUS ENERGIE',
+    'walther': 'Walther',
+    'westfalen': 'Westfalen',
+    'wiro': 'wiro',
+
+    // Auto Dienstleistungen - Werkstätte
+    'atu': 'ATU',
+    'carglass': 'Carglass',
+
+    // Geschäfte und Dienstleistungen - Supermärkte
+    'aldi': 'ALDI',
+    'aldi nord': 'ALDI',
+    'aldi süd': 'ALDI',
+    'alnatura': 'Alnatura',
+    'combi': 'Combi',
+    'denns biomarkt': "denn's Biomarkt",
+    'diska': 'diska',
+    'e center': 'E Center',
+    'e xpress': 'E xpress',
+    'edeka': 'EDEKA',
+    'kaufland': 'Kaufland',
+    'lidl': 'Lidl',
+    'markant': 'Markant',
+    'mein real': 'mein real',
+    'metro': 'METRO',
+    'mix markt': 'Mix Markt',
+    'nah&frisch': 'nah&frisch',
+    'nahkauf': 'nahkauf',
+    'netto': 'Netto',
+    'norma': 'NORMA',
+    'np-markt': 'NP-Markt',
+    'penny': 'PENNY',
+    'rewe': 'REWE',
+    'rewe getränkemarkt': 'REWE Getränkemarkt',
+    'selgros cash & carry': 'SELGROS cash & carry',
+    'tegut': 'tegut',
+    'trinkgut': 'trinkgut',
+    'wasgau': 'WASGAU',
+
+    // Geschäfte und Dienstleistungen - Mode & Bekleidung
+    'adler': 'ADLER',
+    'bershka': 'Bershka',
+    'c&a': 'C&A',
+    'calvin klein': 'Calvin Klein',
+    'deichmann': 'Deichmann',
+    'engbers': 'engbers',
+    'ernstings family': "Ernsting's family",
+    'eyes + more': 'eyes + more',
+    'jack & jones': 'JACK & JONES',
+    'levis': "Levi's",
+    'mango': 'MANGO',
+    'marc opolo': "Marc O'Polo",
+    'mister*lady': 'mister*lady',
+    'new yorker': 'NEW YORKER',
+    'only': 'ONLY',
+    'pandora': 'Pandora',
+    'pull & bear': 'Pull & Bear',
+    'reno': 'RENO',
+    'soliver': 's.Oliver',
+    'schuhpark': 'Schuhpark',
+    'siemes schuhcenter': 'SIEMES Schuhcenter',
+    'takko': 'TAKKO',
+    'tk maxx': 'TK Maxx',
+    'vero moda': 'VERO MODA',
+
+    // Geschäfte und Dienstleistungen - Drogerie
+    'budni': 'BUDNI',
+    'dm-drogerie markt': 'dm-drogerie markt',
+    'dm': 'dm-drogerie markt',
+    'müller': 'Müller',
+    'rituals': 'RITUALS',
+    'rossmann': 'ROSSMANN',
+
+    // Geschäfte und Dienstleistungen - Baumärkte
+    'bauhaus': 'BAUHAUS',
+    'hagebaumarkt': 'hagebaumarkt',
+    'hellweg': 'Hellweg',
+    'hornbach': 'HORNBACH',
+    'obi': 'OBI',
+    'toom baumarkt': 'toom Baumarkt',
+    'toom': 'toom Baumarkt',
+
+    // Geschäfte und Dienstleistungen - Möbel
+    'depot': 'DEPOT',
+    'hammer': 'Hammer',
+    'jysk': 'JYSK',
+    'möbel heinrich': 'Möbel Heinrich',
+    'mömax': 'Mömax',
+    'poco': 'POCO',
+    'porta möbel': 'porta Möbel',
+    'roller': 'ROLLER',
+    'xxxlutz': 'XXXLutz',
+
+    // Geschäfte und Dienstleistungen - Elektronik
+    'media markt': 'Media Markt',
+    'mediamarkt': 'Media Markt',
+
+    // Geschäfte und Dienstleistungen - Sonstige
+    'action': 'Action',
+    'apollo-optik': 'Apollo-Optik',
+    'babyone': 'BabyOne',
+    'christ': 'CHRIST',
+    'clever fit': 'clever fit',
+    'das futterhaus': 'DAS FUTTERHAUS',
+    'decathlon': 'DECATHLON',
+    'dehner': 'Dehner',
+    'euroshop': 'EuroShop',
+    'fressnapf': 'Fressnapf',
+    'galeria': 'GALERIA',
+    'hol ab!': 'Hol ab!',
+    'kik': 'KiK',
+    'kodi': 'KODi',
+    'mcpaper': 'McPaper',
+    'mytoys': 'myToys',
+    'nanu-nana': 'Nanu-Nana',
+    'oxfam': 'Oxfam',
+    'smyths toys': 'Smyths Toys',
+    'sportscheck': 'SportScheck',
+    'tedi': 'TEDi',
+    'teddy toys kinderwelt': 'Teddy Toys Kinderwelt',
+    'telekom shop': 'Telekom Shop',
+    'zoo & co.': 'ZOO & Co.',
+
+    // Speisen und Getränke
+    'block house': 'Block House',
+    'burger king': 'Burger King',
+    'kfc': 'KFC',
+    'mcdonalds': "McDonald's",
+    'subway': 'SUBWAY',
+
+    // Unterkunft
+    'b&b hotels': 'B&B HOTELS',
+    'novum': 'Novum',
+
+    // Auto Dienstleistungen - Ladestationen
+    'tesla supercharger': 'Tesla Supercharger'
+};
+
+// Load settings from localStorage
+function loadSettings() {
+    try {
+        const savedSettings = localStorage.getItem(SCRIPT_ID + '_settings');
+        if (savedSettings) {
+            settings = Object.assign({}, settings, JSON.parse(savedSettings));
+        }
+    } catch (e) {
+        console.warn('Fehler beim Laden der Einstellungen:', e);
+    }
+}
+
+// Save settings to localStorage
+function saveSettings() {
+    try {
+        localStorage.setItem(SCRIPT_ID + '_settings', JSON.stringify(settings));
+    } catch (e) {
+        console.warn('Fehler beim Speichern der Einstellungen:', e);
+    }
+}
+
+// Function to standardize POI names based on community guidelines
+function standardizePOIName(name) {
+    if (!name) return name;
+
+    const lowerName = name.toLowerCase().trim();
+
+    // Check for exact matches first
+    if (STANDARDIZED_POI_NAMES[lowerName]) {
+        return STANDARDIZED_POI_NAMES[lowerName];
+    }
+
+    // Check for partial matches
+    for (const key in STANDARDIZED_POI_NAMES) {
+        if (lowerName.includes(key)) {
+            const regex = new RegExp('\\b' + key + '\\b', 'gi');
+            if (regex.test(lowerName)) {
+                return STANDARDIZED_POI_NAMES[key];
+            }
+        }
+    }
+
+    return name;
+}
+
+// Function to clean German company legal forms from names
+function cleanCompanyName(name) {
+    if (!settings.companyNameCleaning || !name) return name;
+
+    // First standardize POI names if standardization is enabled
+    if (settings.poiStandardization) {
+        name = standardizePOIName(name);
+    }
+
+    // Check if name contains German legal forms (case-insensitive)
+    const legalFormsRegex = /(?<rechtsform>GmbH|gmbh|GMBH|Gmbh|gmb[hH]| AG| ag| Ag| aG|Aktiengesellschaft|aktiengesellschaft|AKTIENGESELLSCHAFT|Aktien-Gesellschaft|GmbH & Co\.? ?KG|gmbh & co\.? ?kg|GMBH & CO\.? ?KG|GmbH & Co\.? ?kg|GmbH &? ?Co\.? ?KG|gmbh &? ?co\.? ?kg|Gesellschaft mit beschränkter Haftung|gesellschaft mit beschränkter haftung|GESELLSCHAFT MIT BESCHRÄNKTER HAFTUNG|Dortmunder Energie- und Wasserversorgung GmbH|dortmunder energie- und wasserversorgung gmbh|Co\.? ?KG|co\.? ?kg|CO\.? ?KG|Co\.? ?kg|e\.V\.|e\.v\.|E\.V\.|E\.v\.|eV|ev|EV|Ev|eingetragener Verein|Eingetragener Verein|EINGETRAGENER VEREIN|UG|ug|Ug|uG|haftungsbeschränkt|Haftungsbeschränkt|HAFTUNGSBESCHRÄNKT)/i;
+
+    if (name.match(legalFormsRegex)) {
+        let cleanedName = name
+            // Spezielle Ersetzungen zuerst
+            .replace(/Dortmunder Energie- und Wasserversorgung GmbH/gi, "DEW21")
+            .replace(/dortmunder energie- und wasserversorgung gmbh/gi, "DEW21")
+            .replace(/DORTMUNDER ENERGIE- UND WASSERVERSORGUNG GMBH/gi, "DEW21")
+
+            // GmbH Varianten
+            .replace(/\bGmbH & Co\.? ?KG\b/gi, "")
+            .replace(/\bGmbH &? ?Co\.? ?KG\b/gi, "")
+            .replace(/\bgmbh & co\.? ?kg\b/gi, "")
+            .replace(/\bGMBH & CO\.? ?KG\b/gi, "")
+            .replace(/\bGmbH\b/gi, "")
+            .replace(/\bgmbh\b/gi, "")
+            .replace(/\bGMBH\b/gi, "")
+            .replace(/\bGmb[hH]\b/gi, "")
+
+            // AG Varianten
+            .replace(/\b AG\b/gi, "")
+            .replace(/\b ag\b/gi, "")
+            .replace(/\b Ag\b/gi, "")
+            .replace(/\b aG\b/gi, "")
+            .replace(/\bAG\b/gi, "")
+            .replace(/\bag\b/gi, "")
+
+            // Aktiengesellschaft
+            .replace(/\bAktiengesellschaft\b/gi, "")
+            .replace(/\baktiengesellschaft\b/gi, "")
+            .replace(/\bAKTIENGESELLSCHAFT\b/gi, "")
+            .replace(/\bAktien-Gesellschaft\b/gi, "")
+            .replace(/\baktien-gesellschaft\b/gi, "")
+
+            // Co. KG Varianten
+            .replace(/\bCo\.? ?KG\b/gi, "")
+            .replace(/\bco\.? ?kg\b/gi, "")
+            .replace(/\bCO\.? ?KG\b/gi, "")
+            .replace(/\bCo\.? ?kg\b/gi, "")
+
+            // Gesellschaft mit beschränkter Haftung
+            .replace(/\bGesellschaft mit beschränkter Haftung\b/gi, "")
+            .replace(/\bgesellschaft mit beschränkter haftung\b/gi, "")
+            .replace(/\bGESELLSCHAFT MIT BESCHRÄNKTER HAFTUNG\b/gi, "")
+
+            // e.V. Varianten
+            .replace(/\be\.V\.\b/gi, "")
+            .replace(/\be\.v\.\b/gi, "")
+            .replace(/\bE\.V\.\b/gi, "")
+            .replace(/\bE\.v\.\b/gi, "")
+            .replace(/\beV\b/gi, "")
+            .replace(/\bev\b/gi, "")
+            .replace(/\bEV\b/gi, "")
+            .replace(/\bEv\b/gi, "")
+
+            // Eingetragener Verein
+            .replace(/\beingetragener Verein\b/gi, "")
+            .replace(/\bEingetragener Verein\b/gi, "")
+            .replace(/\bEINGETRAGENER VEREIN\b/gi, "")
+
+            // UG Varianten
+            .replace(/\bUG\b/gi, "")
+            .replace(/\bug\b/gi, "")
+            .replace(/\bUg\b/gi, "")
+            .replace(/\buG\b/gi, "")
+
+            // Haftungsbeschränkt
+            .replace(/\bhaftungsbeschränkt\b/gi, "")
+            .replace(/\bHaftungsbeschränkt\b/gi, "")
+            .replace(/\bHAFTUNGSBESCHRÄNKT\b/gi, "")
+
+            // Mehrfache Leerzeichen durch einzelne ersetzen
+            .replace(/\s\s+/g, ' ')
+            .trim();
+
+        return cleanedName;
+    }
+
+    return name;
+}
+
+// Function to convert phone numbers to international format
+function formatPhoneNumber(input) {
+    if (!settings.enabled) return input;
+
+    // Auto-remove https:// if enabled
+    if (settings.autoRemoveHttps && input.toLowerCase().startsWith('https://')) {
+        input = input.substring(8);
+    }
+
+    // Remove all spaces, dashes, parentheses and other special characters
+    let number = input.replace(/[\s\-\(\)\/]/g, '');
+
+    // Build dynamic patterns based on settings
+    const patterns = [
+        // Format: 0xxx... -> +countryCodexxx...
+        {
+            regex: new RegExp('^0(\\d+)$'),
+            replacement: settings.countryCode + '$1'
+        },
+        // Format: already with country code
+        {
+            regex: new RegExp('^\\' + settings.countryCode.replace('+', '\\+') + '(\\d+)$'),
+            replacement: settings.countryCode + '$1'
+        },
+        // Format: 00countryCodexxx...
+        {
+            regex: new RegExp('^' + settings.countryNumericCode + '0?(\\d+)$'),
+            replacement: settings.countryCode + '$1'
+        },
+        // Format: countryCodexxx... (without leading 0 or +)
+        {
+            regex: new RegExp('^' + settings.countryCode.substring(1) + '(\\d+)$'),
+            replacement: settings.countryCode + '$1'
+        }
+    ];
+
+    // Add custom patterns
+    for (let i = 0; i < settings.customPatterns.length; i++) {
+        const pattern = settings.customPatterns[i];
+        if (pattern.regex && pattern.replacement) {
+            try {
+                patterns.push({
+                    regex: new RegExp(pattern.regex),
+                    replacement: pattern.replacement
+                });
+            } catch(e) {
+                console.warn('Ungültiges Regex-Pattern:', pattern.regex);
+            }
+        }
+    }
+
+    for (let i = 0; i < patterns.length; i++) {
+        const pattern = patterns[i];
+        if (pattern.regex.test(number)) {
+            return number.replace(pattern.regex, pattern.replacement);
+        }
+    }
+
+    // If no pattern matches, return original input
+    return input;
+}
+
+// Function to remove https:// from website fields
+function formatWebsiteField(input) {
+    if (!settings.autoRemoveHttps) return input;
+
+    // Remove https:// and http:// from beginning
+    if (input.toLowerCase().startsWith('https://')) {
+        return input.substring(8);
+    }
+    if (input.toLowerCase().startsWith('http://')) {
+        return input.substring(7);
+    }
+    return input;
+}
+
+// Simplified function to update objects using the most reliable method
+function updateObjectWithWME(object, newAttributes) {
+    try {
+        // Method 1: Try direct attribute update with proper event triggering
+        if (object.attributes) {
+            // Update attributes directly
+            Object.assign(object.attributes, newAttributes);
+
+            // Trigger events to notify WME of changes
+            try {
+                if (object.trigger && typeof object.trigger === 'function') {
+                    object.trigger('change', object);
+                    object.trigger('change:attributes', object);
+                }
+
+                // Trigger collection events
+                if (object.collection && object.collection.trigger) {
+                    object.collection.trigger('change', object);
+                    object.collection.trigger('update', object);
+                }
+
+                // Mark as modified for WME
+                if (object.markAsModified && typeof object.markAsModified === 'function') {
+                    object.markAsModified();
+                }
+
+                // Set dirty flag if available
+                if (object.setDirty && typeof object.setDirty === 'function') {
+                    object.setDirty(true);
+                }
+
+                console.log('Object updated with event triggering');
+                return true;
+
+            } catch (eventError) {
+                console.warn('Error triggering events:', eventError);
+                // Even if events fail, the update might still work
+                return true;
+            }
+        }
+
+        // Method 2: Try selection-based update
+        if (W.selectionManager) {
+            try {
+                // Select the object
+                W.selectionManager.setSelectedModels([object]);
+
+                // Wait a bit for selection to take effect
+                requestAnimationFrame(function() {
+                    if (object.attributes) {
+                        Object.assign(object.attributes, newAttributes);
+
+                        // Trigger change events
+                        if (object.trigger) {
+                            object.trigger('change');
+                        }
+                    }
+                });
+
+                console.log('Object updated via selection');
+                return true;
+
+            } catch (selectionError) {
+                console.warn('Selection-based update failed:', selectionError);
+            }
+        }
+
+        return false;
+
+    } catch (error) {
+        console.warn('Error updating object:', error);
+        return false;
+    }
+}
+
+// Function to process venue and POI names automatically
+function processVenuesAndPOIs() {
+    if (!settings.companyNameCleaning) {
+        console.log('Company name cleaning ist deaktiviert');
+        return 0;
+    }
+
+    try {
+        let processedCount = 0;
+        console.log('Starte Bereinigung von Venues und POIs...');
+
+        // Check if W.model is available
+        if (!W || !W.model) {
+            console.error('W.model ist nicht verfügbar');
+            return 0;
+        }
+
+        // Get all venues in the current view
+        if (W.model.venues) {
+            const venues = W.model.venues.getObjectArray();
+            console.log('Gefunden: ' + venues.length + ' Venues');
+
+            for (let i = 0; i < venues.length; i++) {
+                const venue = venues[i];
+                if (venue && venue.attributes && venue.attributes.name) {
+                    const originalName = venue.attributes.name;
+                    const cleanedName = cleanCompanyName(originalName);
+
+                    if (cleanedName !== originalName) {
+                        const success = updateObjectWithWME(venue, { name: cleanedName });
+                        if (success) {
+                            console.log('Venue name cleaned: "' + originalName + '" → "' + cleanedName + '"');
+                            processedCount++;
+                        } else {
+                            console.warn('Failed to update venue: "' + originalName + '"');
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get all POIs (mapComments) in the current view
+        if (W.model.mapComments) {
+            const pois = W.model.mapComments.getObjectArray();
+            console.log('Gefunden: ' + pois.length + ' POIs');
+
+            for (let i = 0; i < pois.length; i++) {
+                const poi = pois[i];
+                if (poi && poi.attributes && poi.attributes.subject) {
+                    const originalName = poi.attributes.subject;
+                    const cleanedName = cleanCompanyName(originalName);
+
+                    if (cleanedName !== originalName) {
+                        const success = updateObjectWithWME(poi, { subject: cleanedName });
+                        if (success) {
+                            console.log('POI name cleaned: "' + originalName + '" → "' + cleanedName + '"');
+                            processedCount++;
+                        } else {
+                            console.warn('Failed to update POI: "' + originalName + '"');
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also check for residential places if they exist
+        if (W.model.residentialPlaces) {
+            const residentialPlaces = W.model.residentialPlaces.getObjectArray();
+            console.log('Gefunden: ' + residentialPlaces.length + ' Residential Places');
+
+            for (let i = 0; i < residentialPlaces.length; i++) {
+                const place = residentialPlaces[i];
+                if (place && place.attributes && place.attributes.name) {
+                    const originalName = place.attributes.name;
+                    const cleanedName = cleanCompanyName(originalName);
+
+                    if (cleanedName !== originalName) {
+                        const success = updateObjectWithWME(place, { name: cleanedName });
+                        if (success) {
+                            console.log('Residential place name cleaned: "' + originalName + '" → "' + cleanedName + '"');
+                            processedCount++;
+                        } else {
+                            console.warn('Failed to update residential place: "' + originalName + '"');
+                        }
+                    }
+                }
+            }
+        }
+
+        console.log('Insgesamt ' + processedCount + ' Namen bereinigt');
+        return processedCount;
+
+    } catch (error) {
+        console.error('Fehler beim Bereinigen der Namen:', error);
+        return 0;
+    }
+}
+
+// Event listener for changes in phone and website fields
+function setupPhoneFormatting() {
+    document.addEventListener('input', function(event) {
+        const target = event.target;
+
+        // Handle phone field
+        if (target && target.name === 'phone') {
+            const originalValue = target.value;
+            const formattedValue = formatPhoneNumber(originalValue);
+            if (formattedValue !== originalValue) {
+                target.value = formattedValue;
+            }
+        }
+
+        // Handle website field
+        if (target && (target.name === 'url' || target.name === 'website' || target.placeholder === 'Website' || target.id === 'website')) {
+            const originalValue = target.value;
+            const formattedValue = formatWebsiteField(originalValue);
+            if (formattedValue !== originalValue) {
+                target.value = formattedValue;
+            }
+        }
+
+        // Handle venue name field and POI fields (only if auto-cleaning is enabled)
+        if (settings.autoCleaningEnabled && target && (
+            (target.name === 'name' && target.closest('.venue-edit-panel')) ||
+            (target.name === 'NAME' && target.closest('.venue-edit-panel')) ||
+            (target.name === '**Name**') ||
+            (target.name === 'subject' && target.closest('.poi-edit-panel')) ||
+            (target.name === 'SUBJECT' && target.closest('.poi-edit-panel')) ||
+            target.name === 'venueName' ||
+            target.name === 'VENUENAME' ||
+            target.name === 'NAME' ||
+            target.name === 'name' ||
+            target.placeholder === 'Venue name' ||
+            target.placeholder === 'POI name' ||
+            target.placeholder === 'Place name' ||
+            target.placeholder === 'Name' ||
+            target.placeholder === '**Name**' ||
+            target.id === 'venue-name' ||
+            target.id === 'poi-name' ||
+            (target.className && target.className.includes('venue-name')) ||
+            (target.className && target.className.includes('poi-name'))
+        )) {
+            const originalValue = target.value;
+            const cleanedValue = cleanCompanyName(originalValue);
+            if (cleanedValue !== originalValue) {
+                target.value = cleanedValue;
+
+                // Create and dispatch events using standard DOM methods (CSP-safe)
+                const inputEvent = document.createEvent('Event');
+                inputEvent.initEvent('input', true, false);
+                target.dispatchEvent(inputEvent);
+
+                const changeEvent = document.createEvent('Event');
+                changeEvent.initEvent('change', true, false);
+                target.dispatchEvent(changeEvent);
+
+                console.log('Field "**Name**" cleaned: "' + originalValue + '" → "' + cleanedValue + '" (visual only)');
+            }
+        }
+    });
+}
+
+// Auto-clean form fields when they appear
+function autoCleanFormFields() {
+    if (!settings.companyNameCleaning) return;
+
+    try {
+        // Find all possible name input fields
+        const selectors = [
+            'input[name="**Name**"]',
+            'input[name="name"]',
+            'input[name="NAME"]',
+            'input[placeholder*="Name"]',
+            'input[placeholder*="name"]',
+            'input[id*="name"]',
+            'input[id*="Name"]',
+            '.venue-edit-panel input[type="text"]',
+            '.poi-edit-panel input[type="text"]'
+        ];
+
+        let totalCleaned = 0;
+
+        for (let s = 0; s < selectors.length; s++) {
+            const selector = selectors[s];
+            const fields = document.querySelectorAll(selector);
+
+            for (let f = 0; f < fields.length; f++) {
+                const field = fields[f];
+                // Clean existing values immediately
+                if (field.value) {
+                    const originalValue = field.value;
+                    const cleanedValue = cleanCompanyName(originalValue);
+
+                    if (cleanedValue !== originalValue) {
+                        field.value = cleanedValue;
+
+                        // Trigger events using CSP-safe methods
+                        const inputEvent = document.createEvent('Event');
+                        inputEvent.initEvent('input', true, false);
+                        field.dispatchEvent(inputEvent);
+
+                        const changeEvent = document.createEvent('Event');
+                        changeEvent.initEvent('change', true, false);
+                        field.dispatchEvent(changeEvent);
+
+                        console.log('Auto-cleaned existing field value: "' + originalValue + '" → "' + cleanedValue + '"');
+                        totalCleaned++;
+                    }
+                }
+            }
+        }
+
+        if (totalCleaned > 0) {
+            console.log('Total auto-cleaned form fields: ' + totalCleaned);
+        }
+
+    } catch (error) {
+        console.warn('Fehler beim Auto-Bereinigen der Formularfelder:', error);
+    }
+}
+
+// Create settings UI
+function createSettingsUI(tabPane) {
+    const container = document.createElement('div');
+    container.style.padding = '15px';
+    container.innerHTML =
+        '<style>' +
+        '.phone-formatter-settings {' +
+            'font-family: Arial, sans-serif;' +
+        '}' +
+        '.phone-formatter-settings h3 {' +
+            'margin: 0 0 15px 0;' +
+            'color: #333;' +
+            'border-bottom: 2px solid #00a8cc;' +
+            'padding-bottom: 5px;' +
+        '}' +
+        '.phone-formatter-settings .setting-group {' +
+            'margin-bottom: 15px;' +
+            'padding: 10px;' +
+            'background: #f8f9fa;' +
+            'border-radius: 5px;' +
+            'border-left: 4px solid #00a8cc;' +
+        '}' +
+        '.phone-formatter-settings label {' +
+            'display: block;' +
+            'margin-bottom: 5px;' +
+            'font-weight: bold;' +
+            'color: #555;' +
+        '}' +
+        '.phone-formatter-settings input[type="text"],' +
+        '.phone-formatter-settings textarea {' +
+            'width: 100%;' +
+            'padding: 8px;' +
+            'border: 1px solid #ddd;' +
+            'border-radius: 4px;' +
+            'box-sizing: border-box;' +
+        '}' +
+        '.phone-formatter-settings input[type="checkbox"] {' +
+            'margin-right: 8px;' +
+        '}' +
+        '.phone-formatter-settings button {' +
+            'background: #00a8cc;' +
+            'color: white;' +
+            'border: none;' +
+            'padding: 8px 16px;' +
+            'border-radius: 4px;' +
+            'cursor: pointer;' +
+            'margin-right: 10px;' +
+        '}' +
+        '.phone-formatter-settings button:hover {' +
+            'background: #0088aa;' +
+        '}' +
+        '.phone-formatter-settings .status {' +
+            'padding: 8px;' +
+            'border-radius: 4px;' +
+            'margin-top: 10px;' +
+            'display: none;' +
+        '}' +
+        '.phone-formatter-settings .status.success {' +
+            'background: #d4edda;' +
+            'color: #155724;' +
+            'border: 1px solid #c3e6cb;' +
+        '}' +
+        '.phone-formatter-settings .status.error {' +
+            'background: #f8d7da;' +
+            'color: #721c24;' +
+            'border: 1px solid #f5c6cb;' +
+        '}' +
+        '.phone-formatter-settings .help {' +
+            'font-size: 0.9em;' +
+            'color: #666;' +
+            'margin-top: 5px;' +
+        '}' +
+        '.custom-pattern {' +
+            'margin-bottom: 10px;' +
+            'padding: 10px;' +
+            'background: white;' +
+            'border: 1px solid #ddd;' +
+            'border-radius: 4px;' +
+        '}' +
+        '.action-button {' +
+            'background: #28a745;' +
+            'margin-top: 10px;' +
+        '}' +
+        '.action-button:hover {' +
+            'background: #218838;' +
+        '}' +
+        '</style>' +
+        '<div class="phone-formatter-settings">' +
+            '<h3>📞 Telefonnummer-Formatierung & Namen-Bereinigung</h3>' +
+
+            '<div class="setting-group">' +
+                '<label>' +
+                    '<input type="checkbox" id="enabled"> Script aktiviert' +
+                '</label>' +
+                '<div class="help">Ein-/Ausschalten der automatischen Telefonformat-Konvertierung</div>' +
+            '</div>' +
+
+            '<div class="setting-group">' +
+                '<label>' +
+                    '<input type="checkbox" id="companyNameCleaning"> Firmen-Rechtsformen bereinigen' +
+                '</label>' +
+                '<div class="help">Entfernt automatisch deutsche Rechtsformen aus Venue- und POI-Namen:<br>' +
+                '<strong>GmbH/gmbh/GMBH</strong>, <strong>AG/ag</strong>, <strong>Co. KG/co kg</strong>, <strong>e.V./eV</strong>, <strong>UG/ug</strong>, <strong>Aktiengesellschaft</strong>, etc.<br>' +
+                '(weltweit aktiv, alle Schreibweisen)</div>' +
+
+                '<label style="margin-top: 10px;">' +
+                    '<input type="checkbox" id="poiStandardization"> POI-Namen standardisieren' +
+                '</label>' +
+                '<div class="help">Standardisiert POI-Namen nach <a href="https://www.waze.com/discuss/t/standardisierte-poi-namen/375779" target="_blank">Waze Community Guidelines</a>:<br>' +
+                '<strong>Beispiele:</strong> "aldi süd" → "ALDI", "media markt" → "Media Markt", "mc donalds" → "McDonald\'s"</div>' +
+
+                '<label style="margin-top: 10px;">' +
+                    '<input type="checkbox" id="autoCleaningEnabled"> Automatische Bereinigung aktivieren' +
+                '</label>' +
+                '<div class="help">Bereinigt automatisch beim Tippen und Auswählen (experimentell - nur visuell)</div>' +
+
+                '<button type="button" id="processAllVenues" class="action-button">🏢 Alle Venues & POIs bereinigen</button>' +
+                '<button type="button" id="cleanCurrentFields" class="action-button" style="background: #17a2b8;">🧹 Aktuelle Felder bereinigen</button>' +
+                '<div class="help">Bereinigt alle Venue- und POI-Namen in der aktuellen Kartenansicht oder nur die aktuell sichtbaren Eingabefelder</div>' +
+            '</div>' +
+
+            '<div class="setting-group">' +
+                '<label for="countryCode">Ländervorwahl (mit +):</label>' +
+                '<input type="text" id="countryCode" placeholder="+49">' +
+                '<div class="help">Z.B. +49 für Deutschland, +43 für Österreich, +41 für Schweiz</div>' +
+            '</div>' +
+
+            '<div class="setting-group">' +
+                '<label for="countryNumericCode">Numerischer Ländercode (mit 00):</label>' +
+                '<input type="text" id="countryNumericCode" placeholder="0049">' +
+                '<div class="help">Z.B. 0049 für Deutschland, entspricht der Ländervorwahl ohne +</div>' +
+            '</div>' +
+
+            '<div class="setting-group">' +
+                '<label>' +
+                    '<input type="checkbox" id="autoRemoveHttps"> "https://" und "http://" automatisch entfernen' +
+                '</label>' +
+                '<div class="help">Entfernt automatisch "https://" und "http://" am Anfang von Telefon- und Website-Eingaben</div>' +
+            '</div>' +
+
+            '<div class="setting-group">' +
+                '<label>Benutzerdefinierte Muster:</label>' +
+                '<div id="customPatterns"></div>' +
+                '<button type="button" id="addPattern">+ Neues Muster hinzufügen</button>' +
+                '<div class="help">' +
+                    'Regex-Muster für spezielle Formatierungen. Beispiel:<br>' +
+                    'Regex: <code>^(\\d{4})(\\d{7})$</code> → Ersetzung: <code>+49$1$2</code>' +
+                '</div>' +
+            '</div>' +
+
+            '<div style="margin-top: 20px;">' +
+                '<button type="button" id="saveSettings">💾 Einstellungen speichern</button>' +
+                '<button type="button" id="resetSettings">🔄 Zurücksetzen</button>' +
+            '</div>' +
+            '<div class="status" id="statusMessage"></div>' +
+
+            '<div class="setting-group" style="margin-top: 20px;">' +
+                '<h4>🧪 Test-Bereich</h4>' +
+                '<label for="testInput">Telefonnummer testen:</label>' +
+                '<input type="text" id="testInput" placeholder="01234567890">' +
+                '<div id="testResult" style="margin-top: 5px; font-weight: bold;"></div>' +
+
+                '<label for="testWebsite" style="margin-top: 10px;">Website testen:</label>' +
+                '<input type="text" id="testWebsite" placeholder="https://example.com">' +
+                '<div id="testWebsiteResult" style="margin-top: 5px; font-weight: bold;"></div>' +
+
+                '<label for="testCompanyName" style="margin-top: 10px;">Firmen-/POI-Name testen:</label>' +
+                '<input type="text" id="testCompanyName" placeholder="aldi süd gmbh, media markt ag, mc donalds">' +
+                '<div id="testCompanyResult" style="margin-top: 5px; font-weight: bold;"></div>' +
+            '</div>' +
+        '</div>';
+
+    tabPane.appendChild(container);
+
+    // Setup event listeners
+    setupSettingsEventListeners();
+    loadSettingsIntoUI();
+}
+
+// Add custom pattern UI
+function addCustomPatternUI(regex, replacement) {
+    regex = regex || '';
+    replacement = replacement || '';
+
+    const container = document.getElementById('customPatterns');
+    const patternDiv = document.createElement('div');
+    patternDiv.className = 'custom-pattern';
+    patternDiv.innerHTML =
+        '<label>Regex-Muster:</label>' +
+        '<input type="text" class="pattern-regex" value="' + regex + '" placeholder="^0(\\d+)$">' +
+        '<label>Ersetzung:</label>' +
+        '<input type="text" class="pattern-replacement" value="' + replacement + '" placeholder="+49$1">' +
+        '<button type="button" class="remove-pattern" style="background: #dc3545;">❌ Entfernen</button>';
+
+    // Remove pattern event
+    const removeButton = patternDiv.querySelector('.remove-pattern');
+    removeButton.addEventListener('click', function() {
+        patternDiv.remove();
+    });
+
+    container.appendChild(patternDiv);
+}
+
+// Setup event listeners for settings
+function setupSettingsEventListeners() {
+    // Save settings
+    const saveButton = document.getElementById('saveSettings');
+    saveButton.addEventListener('click', function() {
+        saveSettingsFromUI();
+        showStatusMessage('Einstellungen gespeichert!', 'success');
+    });
+
+    // Reset settings
+    const resetButton = document.getElementById('resetSettings');
+    resetButton.addEventListener('click', function() {
+        if (confirm('Alle Einstellungen zurücksetzen?')) {
+            settings = {
+                countryCode: '+49',
+                countryNumericCode: '0049',
+                enabled: true,
+                autoRemoveHttps: true,
+                customPatterns: [],
+                companyNameCleaning: true,
+                autoCleaningEnabled: false,
+                poiStandardization: true
+            };
+            saveSettings();
+            loadSettingsIntoUI();
+            showStatusMessage('Einstellungen zurückgesetzt!', 'success');
+        }
+    });
+
+    // Add custom pattern
+    const addPatternButton = document.getElementById('addPattern');
+    addPatternButton.addEventListener('click', function() {
+        addCustomPatternUI();
+    });
+
+    // Process all venues button
+    const processButton = document.getElementById('processAllVenues');
+    processButton.addEventListener('click', function() {
+        if (confirm('Alle Venue- und POI-Namen in der aktuellen Ansicht bereinigen?\n\nDies kann nicht rückgängig gemacht werden!')) {
+            try {
+                const processedCount = processVenuesAndPOIs();
+                if (processedCount > 0) {
+                    showStatusMessage(processedCount + ' Namen wurden bereinigt!', 'success');
+                } else {
+                    showStatusMessage('Keine Namen zum Bereinigen gefunden.', 'success');
+                }
+            } catch (error) {
+                console.error('Fehler beim Bereinigen:', error);
+                showStatusMessage('Fehler beim Bereinigen der Namen!', 'error');
+            }
+        }
+    });
+
+    // Clean current fields button
+    const cleanFieldsButton = document.getElementById('cleanCurrentFields');
+    cleanFieldsButton.addEventListener('click', function() {
+        try {
+            autoCleanFormFields();
+            showStatusMessage('Aktuelle Eingabefelder wurden bereinigt!', 'success');
+        } catch (error) {
+            console.error('Fehler beim Bereinigen der Felder:', error);
+            showStatusMessage('Fehler beim Bereinigen der Felder!', 'error');
+        }
+    });
+
+    // Test functionality
+    const testInput = document.getElementById('testInput');
+    const testResult = document.getElementById('testResult');
+    const testWebsite = document.getElementById('testWebsite');
+    const testWebsiteResult = document.getElementById('testWebsiteResult');
+    const testCompanyName = document.getElementById('testCompanyName');
+    const testCompanyResult = document.getElementById('testCompanyResult');
+
+    testInput.addEventListener('input', function() {
+        const result = formatPhoneNumber(testInput.value);
+        testResult.textContent = 'Ergebnis: ' + result;
+        testResult.style.color = result !== testInput.value ? '#28a745' : '#6c757d';
+    });
+
+    testWebsite.addEventListener('input', function() {
+        const result = formatWebsiteField(testWebsite.value);
+        testWebsiteResult.textContent = 'Ergebnis: ' + result;
+        testWebsiteResult.style.color = result !== testWebsite.value ? '#28a745' : '#6c757d';
+    });
+
+    testCompanyName.addEventListener('input', function() {
+        const result = cleanCompanyName(testCompanyName.value);
+        testCompanyResult.textContent = 'Ergebnis: ' + result;
+        testCompanyResult.style.color = result !== testCompanyName.value ? '#28a745' : '#6c757d';
+    });
+}
+
+// Load current settings into UI
+function loadSettingsIntoUI() {
+    document.getElementById('enabled').checked = settings.enabled;
+    document.getElementById('countryCode').value = settings.countryCode;
+    document.getElementById('countryNumericCode').value = settings.countryNumericCode;
+    document.getElementById('autoRemoveHttps').checked = settings.autoRemoveHttps;
+    document.getElementById('companyNameCleaning').checked = settings.companyNameCleaning;
+    document.getElementById('autoCleaningEnabled').checked = settings.autoCleaningEnabled;
+    document.getElementById('poiStandardization').checked = settings.poiStandardization;
+
+    // Clear and reload custom patterns
+    const container = document.getElementById('customPatterns');
+    container.innerHTML = '';
+    for (let i = 0; i < settings.customPatterns.length; i++) {
+        const pattern = settings.customPatterns[i];
+        addCustomPatternUI(pattern.regex, pattern.replacement);
+    }
+}
+
+// Save settings from UI
+function saveSettingsFromUI() {
+    settings.enabled = document.getElementById('enabled').checked;
+    settings.countryCode = document.getElementById('countryCode').value || '+49';
+    settings.countryNumericCode = document.getElementById('countryNumericCode').value || '0049';
+    settings.autoRemoveHttps = document.getElementById('autoRemoveHttps').checked;
+    settings.companyNameCleaning = document.getElementById('companyNameCleaning').checked;
+    settings.autoCleaningEnabled = document.getElementById('autoCleaningEnabled').checked;
+    settings.poiStandardization = document.getElementById('poiStandardization').checked;
+
+    // Collect custom patterns
+    settings.customPatterns = [];
+    const patternDivs = document.querySelectorAll('.custom-pattern');
+    for (let i = 0; i < patternDivs.length; i++) {
+        const patternDiv = patternDivs[i];
+        const regex = patternDiv.querySelector('.pattern-regex').value.trim();
+        const replacement = patternDiv.querySelector('.pattern-replacement').value.trim();
+        if (regex && replacement) {
+            settings.customPatterns.push({ regex: regex, replacement: replacement });
+        }
+    }
+
+    saveSettings();
+}
+
+// Show status message
+function showStatusMessage(message, type) {
+    type = type || 'success';
+    const statusEl = document.getElementById('statusMessage');
+    statusEl.textContent = message;
+    statusEl.className = 'status ' + type;
+    statusEl.style.display = 'block';
+    setTimeout(function() {
+        statusEl.style.display = 'none';
+    }, 3000);
+}
+
+// Initialize the script
+async function initializeScript() {
+    try {
+        // Load settings
+        loadSettings();
+
+        // Setup phone formatting
+        setupPhoneFormatting();
+
+        // Wait for WME to be ready
+        if (W && W.userscripts && W.userscripts.state && W.userscripts.state.isInitialized) {
+            setupSidebarTab();
+        } else {
+            document.addEventListener("wme-initialized", setupSidebarTab, { once: true });
+        }
+
+        console.log('WME Phone Formatter mit Company/POI Name Cleaning initialisiert');
+    } catch (error) {
+        console.error('Fehler bei der Initialisierung:', error);
+    }
+}
+
+// Setup sidebar tab
+async function setupSidebarTab() {
+    try {
+        if (!W.userscripts) {
+            console.warn('W.userscripts API nicht verfügbar');
+            return;
+        }
+
+        const result = W.userscripts.registerSidebarTab(SCRIPT_ID);
+        const tabLabel = result.tabLabel;
+        const tabPane = result.tabPane;
+
+        tabLabel.innerHTML = '📞🏢';
+        tabLabel.title = 'Telefonnummer-Formatierung & Namen-Bereinigung';
+
+        // Wait for tab pane to be connected to DOM
+        await W.userscripts.waitForElementConnected(tabPane);
+
+        // Create settings UI
+        createSettingsUI(tabPane);
+    } catch (error) {
+        console.error('Fehler beim Setup des Sidebar-Tabs:', error);
+    }
+}
+
+// Start the script
+initializeScript();
+
+})();
