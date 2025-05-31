@@ -159,6 +159,8 @@ Das passiert, weil wir onclick Attribute verwenden, die als unsafe-eval eingestu
 
 Waze Map Editor Koordinaten System für GPS ist Web Mercator
 
+CSP temporär deaktivieren führt zum kritischen Fehler und ist nicht erlaubt
+
 Ausgabe immer als vollständiger code
 
 
